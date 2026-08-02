@@ -39,7 +39,7 @@ except Exception as e:
     st.error(f"❌ Detailed Module Load Error: {e}")
     st.write("---")
     st.caption("Common causes:")
-    st.caption("1. Relative imports inside `logic/tier1_screener.py` (e.g., `from ..config import ...`).")
+    st.caption("1. Missing or misspelled function in logic files.")
     st.caption("2. A missing dependency in `requirements.txt`.")
     st.stop()
 
