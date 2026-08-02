@@ -2,37 +2,45 @@
 app.py
 ======
 Main Streamlit dashboard interface for the ETF Portfolio Management System.
-Includes Tier 1 Fundamental Screening, Watchlist Management, Tier 2 Signals,
-Strategy Rule Configurator, and Live ETF Universe Management.
 """
 
 import sys
 import os
 
-# Add root directory to sys.path so imports like 'logic.tier1_screener' resolve cleanly
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+# Guarantee project root is at the head of sys.path
+ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
 
 import streamlit as st
+
+# Diagnostic Import Handler
+try:
+    from config.portfolio import (
+        DYNAMIC_SCAN_POOL,
+        DEFAULT_RISK_RULES,
+        DEFAULT_FAVORITES,
+        TIER2_INDICATOR_CONFIG
+    )
+    from logic.tier1_screener import fetch_etf_fundamentals, run_tier1_screen, map_account_location
+    from logic.tier2_signals import fetch_historical_prices, calculate_tier2_signals
+except Exception as e:
+    st.error(f"❌ Detailed Module Load Error: {e}")
+    st.write("---")
+    st.caption("Common causes:")
+    st.caption("1. Relative imports inside `logic/tier1_screener.py` (e.g., `from ..config import ...` instead of `from config.portfolio import ...`).")
+    st.caption("2. A missing package in `requirements.txt` used inside `tier1_screener.py`.")
+    st.stop()
+
 import pandas as pd
 import numpy as np
-
-# Import configuration defaults
-from config.portfolio import (
-    DYNAMIC_SCAN_POOL,
-    DEFAULT_RISK_RULES,
-    DEFAULT_FAVORITES,
-    TIER2_INDICATOR_CONFIG
-)
-
-# Import logic modules
-from logic.tier1_screener import fetch_etf_fundamentals, run_tier1_screen, map_account_location
-from logic.tier2_signals import fetch_historical_prices, calculate_tier2_signals
 
 # Page Configuration
 st.set_page_config(
     page_title="ETF Tactical & Fundamental Screener",
     page_icon="📈",
     layout="wide"
+)
 )
 
 # Initialize Session States
