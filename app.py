@@ -2,19 +2,30 @@
 app.py
 ======
 Main Streamlit dashboard interface for the ETF Portfolio Management System.
+Includes Tier 1 Fundamental Screening, Watchlist Management, Tier 2 Signals,
+Strategy Rule Configurator, and Live ETF Universe Management.
 """
 
 import sys
 import os
 
-# Guarantee project root is at the head of sys.path
+# Guarantee project root is in sys.path
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
 import streamlit as st
+import pandas as pd
+import numpy as np
 
-# Diagnostic Import Handler
+# Page Configuration
+st.set_page_config(
+    page_title="ETF Tactical & Fundamental Screener",
+    page_icon="📈",
+    layout="wide"
+)
+
+# Safe Imports with Exception Handling
 try:
     from config.portfolio import (
         DYNAMIC_SCAN_POOL,
@@ -28,20 +39,9 @@ except Exception as e:
     st.error(f"❌ Detailed Module Load Error: {e}")
     st.write("---")
     st.caption("Common causes:")
-    st.caption("1. Relative imports inside `logic/tier1_screener.py` (e.g., `from ..config import ...` instead of `from config.portfolio import ...`).")
-    st.caption("2. A missing package in `requirements.txt` used inside `tier1_screener.py`.")
+    st.caption("1. Relative imports inside `logic/tier1_screener.py` (e.g., `from ..config import ...`).")
+    st.caption("2. A missing dependency in `requirements.txt`.")
     st.stop()
-
-import pandas as pd
-import numpy as np
-
-# Page Configuration
-st.set_page_config(
-    page_title="ETF Tactical & Fundamental Screener",
-    page_icon="📈",
-    layout="wide"
-)
-)
 
 # Initialize Session States
 if "risk_rules" not in st.session_state:
