@@ -6,6 +6,12 @@ Includes Tier 1 Fundamental Screening, Watchlist Management, Tier 2 Signals,
 Strategy Rule Configurator, and Live ETF Universe Management.
 """
 
+import sys
+import os
+
+# Add root directory to sys.path so imports like 'logic.tier1_screener' resolve cleanly
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
 import streamlit as st
 import pandas as pd
 import numpy as np
