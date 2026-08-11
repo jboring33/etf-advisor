@@ -45,6 +45,15 @@ st.markdown("""
     div[aria-selected="true"] {
         border-color: #1E88E5 !important;
     }
+
+    /* Wrap Table Column Headers and Cells */
+    div[data-testid="stTable"] th, 
+    div[data-testid="stDataEditor"] th,
+    div[data-testid="stDataEditor"] [role="columnheader"] {
+        white-space: normal !important;
+        word-wrap: break-word !important;
+        text-align: center !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -105,15 +114,6 @@ def fetch_ticker_metrics(ticker: str):
         if yield_pct and yield_pct < 0.5:
             yield_pct = yield_pct * 100
 
-        # Retrieve Morningstar Style Box info
-        style_box = info.get("fundFamily", None)
-        if not style_box or style_box == "None":
-            category_name = info.get("category", "")
-            if "Large" in category_name or "Cap" in category_name:
-                style_box = category_name
-            else:
-                style_box = "Large Blend"
-
         # Retrieve Morningstar 3-Year Star Rating
         stars_num = info.get("threeYearStarRating", info.get("overallStarRating", 4))
         try:
@@ -127,7 +127,6 @@ def fetch_ticker_metrics(ticker: str):
             "Expense Ratio": expense_ratio if expense_ratio else 0.15,
             "AUM ($M)": aum_m,
             "Yield (%)": yield_pct,
-            "Style Box": style_box,
             "3Yr Rating": star_str
         }
     except Exception:
@@ -135,7 +134,6 @@ def fetch_ticker_metrics(ticker: str):
             "Expense Ratio": 0.15, 
             "AUM ($M)": 0.0, 
             "Yield (%)": 0.0, 
-            "Style Box": "Large Blend",
             "3Yr Rating": "⭐⭐⭐⭐"
         }
 
@@ -237,10 +235,9 @@ with tab1:
                 "Delete": False,
                 "⭐ Fav": t in st.session_state.favorites,
                 "Bucket": bucket,
-                "Morningstar Style Box": metrics["Style Box"],
+                "Ticker Symbol": t,
                 "Morningstar 3Yr Rating": metrics["3Yr Rating"],
                 "Group / Category": category,
-                "Ticker": t,
                 "Allocation (%)": alloc,
                 "Expense Ratio": metrics["Expense Ratio"],
                 "AUM": metrics["AUM ($M)"],
@@ -267,41 +264,44 @@ with tab1:
             hide_index=True,
             column_config={
                 "Delete": st.column_config.CheckboxColumn(
-                    "Delete?",
+                    "Del",
+                    width="small",
                     help="Check to delete ticker",
                     default=False
                 ),
                 "⭐ Fav": st.column_config.CheckboxColumn(
-                    "⭐ Fav",
+                    "Fav",
+                    width="small",
                     help="Check to mark as Favorite",
                     default=False
                 ),
                 "Bucket": st.column_config.SelectboxColumn(
                     "Bucket",
+                    width="medium",
                     options=["Brokerage", "IRA", "Roth/HSA"],
                     required=True
                 ),
-                "Morningstar Style Box": st.column_config.TextColumn(
-                    "Morningstar Style Box",
+                "Ticker Symbol": st.column_config.TextColumn(
+                    "Ticker Symbol",
+                    width="small",
                     disabled=True,
-                    help="Morningstar style box / market cap classification"
+                    help="ETF Ticker Symbol"
                 ),
                 "Morningstar 3Yr Rating": st.column_config.TextColumn(
                     "Morningstar 3Yr Rating",
+                    width="medium",
                     disabled=True,
                     help="Morningstar 3-year risk-adjusted star rating"
                 ),
                 "Group / Category": st.column_config.SelectboxColumn(
                     "Group / Category",
+                    width="medium",
                     options=categories,
                     required=True
                 ),
-                "Ticker": st.column_config.TextColumn(
-                    "Ticker",
-                    disabled=True
-                ),
                 "Allocation (%)": st.column_config.NumberColumn(
-                    "Allocation (%)",
+                    "Alloc (%)",
+                    width="small",
                     format="%.1f%%",
                     min_value=0.0,
                     max_value=100.0,
@@ -309,22 +309,26 @@ with tab1:
                     required=True
                 ),
                 "Expense Ratio": st.column_config.NumberColumn(
-                    "Expense Ratio",
+                    "Exp Ratio",
+                    width="small",
                     format="%.2f%%",
                     disabled=True
                 ),
                 "AUM": st.column_config.NumberColumn(
                     "AUM ($M)",
+                    width="small",
                     format="$%.0fM",
                     disabled=True
                 ),
                 "Yield": st.column_config.NumberColumn(
                     "Yield (%)",
+                    width="small",
                     format="%.2f%%",
                     disabled=True
                 ),
                 "Tax Recommendation": st.column_config.TextColumn(
-                    "Tax Recommendation",
+                    "Tax Placement Rec",
+                    width="medium",
                     disabled=True
                 )
             },
@@ -337,12 +341,12 @@ with tab1:
         with col_save:
             if st.button("💾 Save Changes", type="primary", use_container_width=True):
                 # Sync Favorites
-                updated_favs = edited_df[edited_df["⭐ Fav"] == True]["Ticker"].tolist()
+                updated_favs = edited_df[edited_df["⭐ Fav"] == True]["Ticker Symbol"].tolist()
                 st.session_state.favorites = updated_favs
 
                 # Sync Bucket, Allocation, and Category Changes
                 for _, row in edited_df.iterrows():
-                    ticker = row["Ticker"]
+                    ticker = row["Ticker Symbol"]
                     new_bucket = row["Bucket"]
                     new_cat = row["Group / Category"]
                     new_alloc = float(row["Allocation (%)"])
@@ -369,7 +373,7 @@ with tab1:
         with col_del:
             selected_deletes = edited_df[edited_df["Delete"] == True]
             if not selected_deletes.empty:
-                to_delete = selected_deletes["Ticker"].tolist()
+                to_delete = selected_deletes["Ticker Symbol"].tolist()
                 if st.button(f"🗑️ Delete Selected ({len(to_delete)})", use_container_width=True):
                     for cat in categories:
                         st.session_state.scan_pool[cat] = [
