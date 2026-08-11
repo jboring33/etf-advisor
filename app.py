@@ -25,7 +25,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- CUSTOM BLUE THEME & TABLE RESPONSIVENESS INJECTION ---
+# --- CUSTOM BLUE THEME INJECTION ---
 st.markdown("""
 <style>
     /* Primary Save Button Blue Override */
@@ -44,14 +44,6 @@ st.markdown("""
     [data-baseweb="select"] :focus,
     div[aria-selected="true"] {
         border-color: #1E88E5 !important;
-    }
-
-    /* Force headers to wrap cleanly and prevent header truncation */
-    [data-testid="stDataEditor"] div[role="columnheader"] {
-        white-space: normal !important;
-        word-break: break-word !important;
-        text-align: center !important;
-        line-height: 1.2 !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -228,8 +220,6 @@ with tab1:
             alloc = float(st.session_state.allocations.get(t, 0.0))
 
             master_rows.append({
-                "Delete": False,
-                "⭐ Fav": t in st.session_state.favorites,
                 "Bucket": bucket,
                 "Ticker": t,
                 "Name": metrics["Full Name"],
@@ -239,11 +229,18 @@ with tab1:
                 "Allocation (%)": alloc,
                 "Expense Ratio": metrics["Expense Ratio"],
                 "AUM": metrics["AUM ($M)"],
-                "Yield": metrics["Yield (%)"]
+                "Yield": metrics["Yield (%)"],
+                "⭐ Fav": t in st.session_state.favorites,
+                "Delete": False
             })
 
     if master_rows:
         master_df = pd.DataFrame(master_rows)
+
+        # Custom categorical sort order to group by Bucket systematically
+        bucket_order = ["Brokerage", "IRA", "Roth/HSA"]
+        master_df["Bucket"] = pd.Categorical(master_df["Bucket"], categories=bucket_order, ordered=True)
+        master_df = master_df.sort_values(by=["Bucket", "Ticker"]).reset_index(drop=True)
 
         # Total Allocation Calculation & Dynamic Warning Banner
         total_alloc = master_df["Allocation (%)"].sum()
@@ -260,22 +257,10 @@ with tab1:
             key="master_universe_editor",
             hide_index=True,
             column_config={
-                "Delete": st.column_config.CheckboxColumn(
-                    "Del",
-                    width=45,
-                    help="Check to delete ticker",
-                    default=False
-                ),
-                "⭐ Fav": st.column_config.CheckboxColumn(
-                    "Fav",
-                    width=45,
-                    help="Check to mark as Favorite",
-                    default=False
-                ),
                 "Bucket": st.column_config.SelectboxColumn(
                     "Bucket",
                     width=100,
-                    options=["Brokerage", "IRA", "Roth/HSA"],
+                    options=bucket_order,
                     required=True
                 ),
                 "Ticker": st.column_config.TextColumn(
@@ -334,11 +319,23 @@ with tab1:
                     width=75,
                     format="%.2f%%",
                     disabled=True
+                ),
+                "⭐ Fav": st.column_config.CheckboxColumn(
+                    "Fav",
+                    width=45,
+                    help="Check to mark as Favorite",
+                    default=False
+                ),
+                "Delete": st.column_config.CheckboxColumn(
+                    "Del",
+                    width=45,
+                    help="Check to delete ticker",
+                    default=False
                 )
             },
             column_order=[
-                "Delete", "⭐ Fav", "Bucket", "Ticker", "Name", "Morningstar 3 yr", 
-                "Type", "Region", "Allocation (%)", "Expense Ratio", "AUM", "Yield"
+                "Bucket", "Ticker", "Name", "Morningstar 3 yr", "Type", "Region", 
+                "Allocation (%)", "Expense Ratio", "AUM", "Yield", "⭐ Fav", "Delete"
             ],
             use_container_width=True
         )
@@ -355,7 +352,7 @@ with tab1:
                 # Sync Bucket, Allocation, Region, and Category Changes
                 for _, row in edited_df.iterrows():
                     ticker = row["Ticker"]
-                    new_bucket = row["Bucket"]
+                    new_bucket = str(row["Bucket"])
                     new_type = row["Type"]
                     new_region = row["Region"]
                     new_alloc = float(row["Allocation (%)"])
