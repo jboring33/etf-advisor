@@ -8,7 +8,6 @@ ETF Asset Location & Tactical Screener Dashboard.
 import os
 import sys
 
-# Ensure root directory is in sys.path
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
@@ -25,12 +24,11 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Imports from modular logic & config
+# Imports
 from config.portfolio import (
     load_universe, 
     save_universe, 
-    restore_defaults, 
-    load_defaults
+    restore_defaults
 )
 from logic.tier1_screener import run_tier1_screening, get_tax_location_recommendation
 from logic.tier2_signals import calculate_tier2_signals
@@ -41,23 +39,24 @@ if "scan_pool" not in st.session_state:
     st.session_state.scan_pool = load_universe()
 
 if "favorites" not in st.session_state:
-    st.session_state.favorites = []
+    st.session_state.favorites = st.session_state.scan_pool.get("_favorites", [])
 
 
 # ==============================================================================
 # SIDEBAR CONTROLS
 # ==============================================================================
 st.sidebar.title("🛠️ Screener Controls")
-st.sidebar.markdown("Configure global parameters for signal calculations.")
+st.sidebar.markdown("Configure parameters for signal calculations.")
 
-# Global Inputs
 macro_benchmark = st.sidebar.text_input("Macro Benchmark Ticker", value="SPY").strip().upper()
 rsi_window = st.sidebar.number_input("RSI Window (Days)", min_value=5, max_value=30, value=14)
 sma_fast_window = st.sidebar.number_input("Fast SMA (Days)", min_value=10, max_value=100, value=50)
 sma_slow_window = st.sidebar.number_input("Slow SMA (Days)", min_value=50, max_value=300, value=200)
 
+filter_by_favs = st.sidebar.checkbox("⭐ Show Favorites Only across Dashboard", value=False)
+
 st.sidebar.markdown("---")
-st.sidebar.info("💡 **Tip:** Changes made in Tab 5 to your ETF Universe persist permanently across restarts.")
+st.sidebar.info("💡 **Tip:** Changes made in Tab 4 to your ETF Universe persist permanently across restarts.")
 
 
 # ==============================================================================
@@ -66,10 +65,9 @@ st.sidebar.info("💡 **Tip:** Changes made in Tab 5 to your ETF Universe persis
 st.title("📈 ETF Asset Location & Tactical Screener")
 st.caption("A multi-tier decision framework for tax-efficient asset placement and momentum timing.")
 
-# Create the 5 main tabs
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
+# Streamlined 4-Tab Navigation
+tab1, tab2, tab3, tab4 = st.tabs([
     "🚀 Tier 1: Dynamic Recommendations",
-    "⭐ My Favorites Watchlist",
     "📊 Tier 2: Tactical Buy/Sell Signals",
     "🛠️ Strategy Rule Configurator",
     "🌐 ETF Universe Manager"
@@ -81,7 +79,7 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 # ==============================================================================
 with tab1:
     st.header("🚀 Tier 1: Fundamental Screening & Tax Location")
-    st.write("Analyzes fee structure, liquidity, and asset class dynamics to recommend optimal account placement.")
+    st.write("Fetches live fundamentals (Expense Ratio, AUM, Yield) and calculates optimal tax placement.")
 
     account_type = st.radio(
         "Select Target Account Type:",
@@ -90,107 +88,89 @@ with tab1:
     )
 
     if st.button("🔎 Run Tier 1 Screening", key="run_tier1_btn"):
-        with st.spinner("Analyzing universe fundamentals and tax placement efficiency..."):
-            tier1_results = run_tier1_screening(st.session_state.scan_pool)
+        with st.spinner("Fetching live market fundamentals and analyzing tax placement..."):
+            # Filter pool if Favorites Only toggle is active
+            active_pool = {}
+            for cat, t_list in st.session_state.scan_pool.items():
+                if cat.startswith("_"): continue
+                if filter_by_favs:
+                    active_pool[cat] = [t for t in t_list if t in st.session_state.favorites]
+                else:
+                    active_pool[cat] = t_list
+
+            tier1_results = run_tier1_screening(active_pool)
             
             if not tier1_results.empty:
                 st.subheader(f"Optimal Holdings for {account_type}")
                 
-                # Apply account location tax logic
                 tier1_results["Tax Efficiency Note"] = tier1_results.apply(
                     lambda row: get_tax_location_recommendation(row["Category"], account_type), axis=1
                 )
                 
-                # Display Interactive Table
+                # Flag favorites in table
+                tier1_results["⭐ Favorite"] = tier1_results["Ticker"].apply(
+                    lambda t: True if t in st.session_state.favorites else False
+                )
+
                 st.dataframe(
                     tier1_results,
                     column_config={
                         "Expense Ratio": st.column_config.NumberColumn("Expense Ratio", format="%.2f%%"),
                         "AUM": st.column_config.NumberColumn("AUM ($M)", format="$%.0fM"),
-                        "Passed Screener": st.column_config.CheckboxColumn("Passed Quality Screen?")
+                        "Yield (%)": st.column_config.NumberColumn("Yield (%)", format="%.2f%%"),
+                        "Passed Screener": st.column_config.CheckboxColumn("Passed Screen?"),
+                        "⭐ Favorite": st.column_config.CheckboxColumn("⭐")
                     },
                     use_container_width=True,
                     hide_index=True
                 )
             else:
-                st.warning("No tickers found in active universe scan pool. Please check Tab 5.")
+                st.warning("No tickers found matching current filter criteria. Check Tab 4.")
 
 
 # ==============================================================================
-# TAB 2: MY FAVORITES WATCHLIST
+# TAB 2: TIER 2 TACTICAL BUY/SELL SIGNALS
 # ==============================================================================
 with tab2:
-    st.header("⭐ My Favorites Watchlist")
-    st.write("Track and monitor key ETFs across your custom pools.")
-
-    # Flatten active pool tickers for selection
-    all_tickers = sorted(list(set([t for pool in st.session_state.scan_pool.values() for t in pool])))
-
-    selected_favs = st.multiselect(
-        "Select Tickers to add to your Active Favorites Watchlist:",
-        options=all_tickers,
-        default=[t for t in st.session_state.favorites if t in all_tickers]
-    )
-    
-    st.session_state.favorites = selected_favs
-
-    if st.session_state.favorites:
-        st.subheader("Watchlist Quick Summary")
-        fav_data = []
-        for ticker in st.session_state.favorites:
-            fav_data.append({"Ticker Symbol": ticker, "Status": "Active Watch"});
-        
-        st.dataframe(pd.DataFrame(fav_data), use_container_width=True, hide_index=True)
-    else:
-        st.info("Your watchlist is currently empty. Add tickers using the multiselect above.")
-
-
-# ==============================================================================
-# TAB 3: TIER 2 TACTICAL BUY/SELL SIGNALS (WITH MACRO OVERLAY)
-# ==============================================================================
-with tab3:
     st.header("📊 Tier 2: Tactical Technical Signals & Macro Overlay")
-    st.write("Evaluates individual price momentum (RSI, Moving Averages) relative to broad market regime conditions.")
+    st.write("Evaluates individual price momentum relative to broad market regime conditions.")
 
     if st.button("⚡ Calculate Tactical Signals", key="calc_tier2_btn"):
-        with st.spinner(f"Fetching market data for scan pool and benchmark ({macro_benchmark})..."):
-            
-            # Fetch benchmark history to evaluate macro regime
+        with st.spinner(f"Evaluating market signals for benchmark ({macro_benchmark})..."):
             try:
-                # Calculate benchmark series (mocked/integrated via calculation engine)
                 benchmark_dates = pd.date_range(end=pd.Timestamp.today(), periods=250, freq="D")
-                benchmark_prices = pd.Series(np.linspace(400, 500, 250), index=benchmark_dates) # Evaluated via regime engine
+                benchmark_prices = pd.Series(np.linspace(400, 500, 250), index=benchmark_dates)
                 macro_regime = evaluate_market_regime(benchmark_prices)
                 
-                # Banner for Macro Regime
                 if macro_regime["is_bullish"]:
-                    st.success(f"🟢 **Macro Regime: Bullish** — Benchmark ({macro_benchmark}) is above its 200 SMA. Full buy signals enabled.")
+                    st.success(f"🟢 **Macro Regime: Bullish** — Benchmark ({macro_benchmark}) is above its 200 SMA.")
                 else:
-                    st.warning(f"⚠️ **Macro Regime: Bearish Warning** — Benchmark ({macro_benchmark}) is below its 200 SMA. Candidate ratings capped at 'Hold'.")
+                    st.warning(f"⚠️ **Macro Regime: Bearish Warning** — Benchmark ({macro_benchmark}) is below its 200 SMA.")
 
             except Exception as e:
                 st.error(f"Could not calculate macro regime for {macro_benchmark}: {str(e)}")
                 macro_regime = {"is_bullish": True, "regime": "Neutral"}
 
-            # Process candidates
             st.markdown("---")
             for category, tickers in st.session_state.scan_pool.items():
-                if tickers:
+                if category.startswith("_"): continue
+                
+                active_tickers = [t for t in tickers if t in st.session_state.favorites] if filter_by_favs else tickers
+                
+                if active_tickers:
                     st.subheader(f"📂 Category: {category}")
-                    
-                    cols = st.columns(min(len(tickers), 4))
-                    for idx, ticker in enumerate(tickers):
+                    cols = st.columns(min(len(active_tickers), 4))
+                    for idx, ticker in enumerate(active_tickers):
                         with cols[idx % 4]:
-                            # Generate candidate price history and raw signals
                             sample_dates = pd.date_range(end=pd.Timestamp.today(), periods=250, freq="D")
                             sample_prices = pd.Series(np.linspace(100, 150, 250), index=sample_dates)
                             
                             raw_signal = calculate_tier2_signals(sample_prices)
                             final_signal = apply_macro_regime_overlay(raw_signal, benchmark_prices)
 
-                            # Metric card display
+                            fav_icon = "⭐ " if ticker in st.session_state.favorites else ""
                             st.metric(
-                                label=f"{ticker}",
+                                label=f"{fav_icon}{ticker}",
                                 value=final_signal["Rating"],
                                 delta=f"Score: {final_signal['Composite_Score']:.1f}/100"
                             )
@@ -205,9 +185,9 @@ with tab3:
 
 
 # ==============================================================================
-# TAB 4: STRATEGY RULE CONFIGURATOR
+# TAB 3: STRATEGY RULE CONFIGURATOR
 # ==============================================================================
-with tab4:
+with tab3:
     st.header("🛠️ Strategy Rule Configurator")
     st.write("Customize scoring thresholds and risk weights for signal generation.")
 
@@ -228,11 +208,11 @@ with tab4:
 
 
 # ==============================================================================
-# TAB 5: ETF UNIVERSE MANAGER (Batch Delete + Quick Add + Dynamic Defaults)
+# TAB 4: ETF UNIVERSE MANAGER (With Integrated Favorites Checkbox)
 # ==============================================================================
-with tab5:
+with tab4:
     st.header("🌐 ETF Universe Manager")
-    st.caption("Manage your scan pools. Select rows to bulk-delete or use the quick-add inputs per category. All changes persist to disk automatically.")
+    st.caption("Manage tickers and set Favorites. Check 'Fav?' to pin to your watchlist or 'Delete?' to remove tickers.")
 
     # --- ADVANCED DEFAULT CONTROLS ---
     with st.expander("⚙️ Advanced Default Settings"):
@@ -240,40 +220,49 @@ with tab5:
         
         with col_save:
             if st.button("💾 Save Current as New Default", use_container_width=True):
+                st.session_state.scan_pool["_favorites"] = st.session_state.favorites
                 save_universe(st.session_state.scan_pool, as_default=True)
-                st.success("Current configuration locked in as the new baseline default (`default_universe.json`)!")
+                st.success("Locked current setup as baseline default (`default_universe.json`)!")
                 
         with col_restore:
             if st.button("🔄 Restore to Defaults", use_container_width=True):
                 st.session_state.scan_pool = restore_defaults()
+                st.session_state.favorites = st.session_state.scan_pool.get("_favorites", [])
                 st.info("Restored configuration to baseline disk defaults.")
                 st.rerun()
     
     st.markdown("---")
 
-    # Display each category in a table layout
+    # Display each category table with Favorite and Delete checkboxes
     for category, tickers in list(st.session_state.scan_pool.items()):
+        if category.startswith("_"): continue
+
         st.subheader(f"📂 {category}")
         
-        # Build DataFrame representation for st.data_editor
+        # Build DataFrame with Favorite and Delete columns
         df_data = pd.DataFrame({
-            "Select": [False] * len(tickers),
+            "⭐ Fav": [t in st.session_state.favorites for t in tickers],
+            "Delete": [False] * len(tickers),
             "Ticker Symbol": tickers
         })
 
         col_table, col_add = st.columns([2, 1])
 
         with col_table:
-            # Interactive editable table for bulk deletion
             edited_df = st.data_editor(
                 df_data,
                 key=f"editor_{category}",
                 hide_index=True,
                 column_config={
-                    "Select": st.column_config.CheckboxColumn(
+                    "⭐ Fav": st.column_config.CheckboxColumn(
+                        "Fav?",
+                        help="Check to mark as Favorite",
+                        default=False
+                    ),
+                    "Delete": st.column_config.CheckboxColumn(
                         "Delete?",
                         help="Select tickers to bulk delete",
-                        default=False,
+                        default=False
                     ),
                     "Ticker Symbol": st.column_config.TextColumn(
                         "Ticker Symbol",
@@ -283,21 +272,36 @@ with tab5:
                 use_container_width=True
             )
 
-            # Process selected rows for bulk delete
-            selected_rows = edited_df[edited_df["Select"] == True]
+            # Detect Favorite checkbox changes
+            current_fav_state = set(st.session_state.favorites)
+            updated_fav_tickers = set(edited_df[edited_df["⭐ Fav"] == True]["Ticker Symbol"].tolist())
+            cat_tickers_set = set(tickers)
+
+            # Sync favorite toggles for this category
+            new_fav_state = (current_fav_state - cat_tickers_set) | updated_fav_tickers
+            if new_fav_state != current_fav_state:
+                st.session_state.favorites = list(new_fav_state)
+                st.session_state.scan_pool["_favorites"] = st.session_state.favorites
+                save_universe(st.session_state.scan_pool, as_default=False)
+                st.rerun()
+
+            # Detect Delete button click
+            selected_rows = edited_df[edited_df["Delete"] == True]
             if not selected_rows.empty:
                 to_delete = selected_rows["Ticker Symbol"].tolist()
                 if st.button(f"🗑️ Delete Selected ({len(to_delete)}) from {category}", key=f"del_btn_{category}"):
                     st.session_state.scan_pool[category] = [
                         t for t in st.session_state.scan_pool[category] if t not in to_delete
                     ]
-                    # Persist automatically to active user universe on disk
+                    # Also clean deleted items from favorites if applicable
+                    st.session_state.favorites = [t for t in st.session_state.favorites if t not in to_delete]
+                    st.session_state.scan_pool["_favorites"] = st.session_state.favorites
+                    
                     save_universe(st.session_state.scan_pool, as_default=False)
                     st.success(f"Removed {', '.join(to_delete)} from {category}!")
                     st.rerun()
 
         with col_add:
-            # Inline quick-add section per category
             st.markdown("##### Quick Add")
             with st.form(key=f"add_form_{category}"):
                 new_ticker_input = st.text_input(
@@ -312,7 +316,6 @@ with tab5:
                 if submitted and new_ticker_input:
                     if new_ticker_input not in st.session_state.scan_pool[category]:
                         st.session_state.scan_pool[category].append(new_ticker_input)
-                        # Persist automatically to active user universe on disk
                         save_universe(st.session_state.scan_pool, as_default=False)
                         st.success(f"Added {new_ticker_input} to {category}!")
                         st.rerun()
