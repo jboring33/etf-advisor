@@ -27,19 +27,25 @@ st.set_page_config(
 # Imports
 from config.portfolio import (
     load_universe, 
-    save_universe, 
-    restore_defaults
+    save_universe
 )
 from logic.tier1_screener import run_tier1_screening, get_tax_location_recommendation
 from logic.tier2_signals import calculate_tier2_signals
 from logic.macro_overlay import evaluate_market_regime, apply_macro_regime_overlay
 
-# Initialize persistent session state
+# Initialize persistent session state from JSON disk storage
 if "scan_pool" not in st.session_state:
     st.session_state.scan_pool = load_universe()
 
+if "account_types" not in st.session_state:
+    st.session_state.account_types = st.session_state.scan_pool.get("_account_types", {})
+
 if "favorites" not in st.session_state:
     st.session_state.favorites = st.session_state.scan_pool.get("_favorites", [])
+
+# Helper to get user category list dynamically
+def get_active_categories():
+    return [cat for cat in st.session_state.scan_pool.keys() if not cat.startswith("_")]
 
 
 # ==============================================================================
@@ -56,7 +62,7 @@ sma_slow_window = st.sidebar.number_input("Slow SMA (Days)", min_value=50, max_v
 filter_by_favs = st.sidebar.checkbox("⭐ Show Favorites Only across Dashboard", value=False)
 
 st.sidebar.markdown("---")
-st.sidebar.info("💡 **Tip:** Changes made in Tab 4 to your ETF Universe persist permanently across restarts.")
+st.sidebar.info("💡 **Tip:** Changes made in Tab 4 save directly to disk and persist permanently across restarts.")
 
 
 # ==============================================================================
@@ -83,16 +89,15 @@ with tab1:
 
     account_type = st.radio(
         "Select Target Account Type:",
-        ["Taxable Brokerage", "Tax-Deferred (Traditional IRA/401k)", "Tax-Free (Roth IRA/401k)"],
+        ["Brokerage", "IRA", "Roth/HSA"],
         horizontal=True
     )
 
     if st.button("🔎 Run Tier 1 Screening", key="run_tier1_btn"):
         with st.spinner("Fetching live market fundamentals and analyzing tax placement..."):
-            # Filter pool if Favorites Only toggle is active
             active_pool = {}
-            for cat, t_list in st.session_state.scan_pool.items():
-                if cat.startswith("_"): continue
+            for cat in get_active_categories():
+                t_list = st.session_state.scan_pool[cat]
                 if filter_by_favs:
                     active_pool[cat] = [t for t in t_list if t in st.session_state.favorites]
                 else:
@@ -107,7 +112,9 @@ with tab1:
                     lambda row: get_tax_location_recommendation(row["Category"], account_type), axis=1
                 )
                 
-                # Flag favorites in table
+                tier1_results["Target Bucket"] = tier1_results["Ticker"].apply(
+                    lambda t: st.session_state.account_types.get(t, "Brokerage")
+                )
                 tier1_results["⭐ Favorite"] = tier1_results["Ticker"].apply(
                     lambda t: True if t in st.session_state.favorites else False
                 )
@@ -152,9 +159,8 @@ with tab2:
                 macro_regime = {"is_bullish": True, "regime": "Neutral"}
 
             st.markdown("---")
-            for category, tickers in st.session_state.scan_pool.items():
-                if category.startswith("_"): continue
-                
+            for category in get_active_categories():
+                tickers = st.session_state.scan_pool[category]
                 active_tickers = [t for t in tickers if t in st.session_state.favorites] if filter_by_favs else tickers
                 
                 if active_tickers:
@@ -169,8 +175,10 @@ with tab2:
                             final_signal = apply_macro_regime_overlay(raw_signal, benchmark_prices)
 
                             fav_icon = "⭐ " if ticker in st.session_state.favorites else ""
+                            acct_tag = f" ({st.session_state.account_types.get(ticker, 'Brokerage')})"
+                            
                             st.metric(
-                                label=f"{fav_icon}{ticker}",
+                                label=f"{fav_icon}{ticker}{acct_tag}",
                                 value=final_signal["Rating"],
                                 delta=f"Score: {final_signal['Composite_Score']:.1f}/100"
                             )
@@ -208,118 +216,185 @@ with tab3:
 
 
 # ==============================================================================
-# TAB 4: ETF UNIVERSE MANAGER (With Integrated Favorites Checkbox)
+# TAB 4: ETF UNIVERSE MANAGER (Group Manager + Unified Table)
 # ==============================================================================
 with tab4:
     st.header("🌐 ETF Universe Manager")
-    st.caption("Manage tickers and set Favorites. Check 'Fav?' to pin to your watchlist or 'Delete?' to remove tickers.")
+    st.caption("Manage asset groups and master ticker table. All edits save directly to disk.")
 
-    # --- ADVANCED DEFAULT CONTROLS ---
-    with st.expander("⚙️ Advanced Default Settings"):
-        col_save, col_restore = st.columns(2)
+    categories = get_active_categories()
+
+    # --- CATEGORY / GROUP MANAGEMENT SECTION ---
+    with st.expander("📁 Manage Asset Group Categories", expanded=False):
+        col_c_add, col_c_del = st.columns(2)
         
-        with col_save:
-            if st.button("💾 Save Current as New Default", use_container_width=True):
-                st.session_state.scan_pool["_favorites"] = st.session_state.favorites
-                save_universe(st.session_state.scan_pool, as_default=True)
-                st.success("Locked current setup as baseline default (`default_universe.json`)!")
-                
-        with col_restore:
-            if st.button("🔄 Restore to Defaults", use_container_width=True):
-                st.session_state.scan_pool = restore_defaults()
-                st.session_state.favorites = st.session_state.scan_pool.get("_favorites", [])
-                st.info("Restored configuration to baseline disk defaults.")
-                st.rerun()
-    
-    st.markdown("---")
-
-    # Display each category table with Favorite and Delete checkboxes
-    for category, tickers in list(st.session_state.scan_pool.items()):
-        if category.startswith("_"): continue
-
-        st.subheader(f"📂 {category}")
-        
-        # Build DataFrame with Favorite and Delete columns
-        df_data = pd.DataFrame({
-            "⭐ Fav": [t in st.session_state.favorites for t in tickers],
-            "Delete": [False] * len(tickers),
-            "Ticker Symbol": tickers
-        })
-
-        col_table, col_add = st.columns([2, 1])
-
-        with col_table:
-            edited_df = st.data_editor(
-                df_data,
-                key=f"editor_{category}",
-                hide_index=True,
-                column_config={
-                    "⭐ Fav": st.column_config.CheckboxColumn(
-                        "Fav?",
-                        help="Check to mark as Favorite",
-                        default=False
-                    ),
-                    "Delete": st.column_config.CheckboxColumn(
-                        "Delete?",
-                        help="Select tickers to bulk delete",
-                        default=False
-                    ),
-                    "Ticker Symbol": st.column_config.TextColumn(
-                        "Ticker Symbol",
-                        disabled=True
-                    )
-                },
-                use_container_width=True
-            )
-
-            # Detect Favorite checkbox changes
-            current_fav_state = set(st.session_state.favorites)
-            updated_fav_tickers = set(edited_df[edited_df["⭐ Fav"] == True]["Ticker Symbol"].tolist())
-            cat_tickers_set = set(tickers)
-
-            # Sync favorite toggles for this category
-            new_fav_state = (current_fav_state - cat_tickers_set) | updated_fav_tickers
-            if new_fav_state != current_fav_state:
-                st.session_state.favorites = list(new_fav_state)
-                st.session_state.scan_pool["_favorites"] = st.session_state.favorites
-                save_universe(st.session_state.scan_pool, as_default=False)
-                st.rerun()
-
-            # Detect Delete button click
-            selected_rows = edited_df[edited_df["Delete"] == True]
-            if not selected_rows.empty:
-                to_delete = selected_rows["Ticker Symbol"].tolist()
-                if st.button(f"🗑️ Delete Selected ({len(to_delete)}) from {category}", key=f"del_btn_{category}"):
-                    st.session_state.scan_pool[category] = [
-                        t for t in st.session_state.scan_pool[category] if t not in to_delete
-                    ]
-                    # Also clean deleted items from favorites if applicable
-                    st.session_state.favorites = [t for t in st.session_state.favorites if t not in to_delete]
-                    st.session_state.scan_pool["_favorites"] = st.session_state.favorites
-                    
-                    save_universe(st.session_state.scan_pool, as_default=False)
-                    st.success(f"Removed {', '.join(to_delete)} from {category}!")
-                    st.rerun()
-
-        with col_add:
-            st.markdown("##### Quick Add")
-            with st.form(key=f"add_form_{category}"):
-                new_ticker_input = st.text_input(
-                    "Ticker", 
-                    placeholder="e.g. VTI", 
-                    key=f"input_{category}",
-                    label_visibility="collapsed"
-                ).strip().upper()
-                
-                submitted = st.form_submit_button("➕ Add Ticker", use_container_width=True)
-                
-                if submitted and new_ticker_input:
-                    if new_ticker_input not in st.session_state.scan_pool[category]:
-                        st.session_state.scan_pool[category].append(new_ticker_input)
-                        save_universe(st.session_state.scan_pool, as_default=False)
-                        st.success(f"Added {new_ticker_input} to {category}!")
+        with col_c_add:
+            st.markdown("##### Add New Group Category")
+            with st.form("add_group_form", clear_on_submit=True):
+                new_cat_name = st.text_input("Group Name", placeholder="e.g. Growth").strip()
+                add_cat_submitted = st.form_submit_button("➕ Create Group", use_container_width=True)
+                if add_cat_submitted and new_cat_name:
+                    if new_cat_name not in st.session_state.scan_pool:
+                        st.session_state.scan_pool[new_cat_name] = []
+                        save_universe(st.session_state.scan_pool)
+                        st.success(f"Group '{new_cat_name}' created!")
                         st.rerun()
                     else:
-                        st.warning(f"{new_ticker_input} already exists in {category}.")
+                        st.warning(f"Group '{new_cat_name}' already exists.")
 
-        st.markdown("---")
+        with col_c_del:
+            st.markdown("##### Delete Existing Group")
+            with st.form("del_group_form", clear_on_submit=True):
+                cat_to_del = st.selectbox("Select Group to Delete", options=[""] + categories)
+                del_cat_submitted = st.form_submit_button("🗑️ Delete Group", use_container_width=True)
+                if del_cat_submitted and cat_to_del:
+                    if len(st.session_state.scan_pool[cat_to_del]) > 0:
+                        st.error(f"Cannot delete group '{cat_to_del}' because it contains tickers. Delete or reassign its tickers first!")
+                    else:
+                        st.session_state.scan_pool.pop(cat_to_del)
+                        save_universe(st.session_state.scan_pool)
+                        st.success(f"Group '{cat_to_del}' deleted!")
+                        st.rerun()
+
+    st.markdown("---")
+
+    # --- SINGLE UNIFIED QUICK ADD SECTION ---
+    st.subheader("➕ Quick Add Ticker")
+    with st.form("quick_add_master_form", clear_on_submit=True):
+        col_t, col_c, col_a, col_btn = st.columns([2, 2, 2, 1.5])
+        
+        with col_t:
+            add_ticker = st.text_input("Ticker Symbol", placeholder="e.g. VTI").strip().upper()
+        with col_c:
+            add_category = st.selectbox("Group Category", options=categories)
+        with col_a:
+            add_account = st.selectbox("Account Type Bucket", options=["Brokerage", "IRA", "Roth/HSA"])
+        with col_btn:
+            st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
+            add_submitted = st.form_submit_button("➕ Add Ticker", use_container_width=True)
+
+        if add_submitted and add_ticker and add_category:
+            existing_tickers = [t for cat in categories for t in st.session_state.scan_pool[cat]]
+            if add_ticker not in existing_tickers:
+                st.session_state.scan_pool[add_category].append(add_ticker)
+                st.session_state.account_types[add_ticker] = add_account
+                
+                # Persist directly to disk
+                st.session_state.scan_pool["_account_types"] = st.session_state.account_types
+                st.session_state.scan_pool["_favorites"] = st.session_state.favorites
+                save_universe(st.session_state.scan_pool)
+                
+                st.success(f"Added {add_ticker} to {add_category} ({add_account})!")
+                st.rerun()
+            else:
+                st.warning(f"Ticker {add_ticker} already exists in the universe.")
+
+    st.markdown("---")
+
+    # --- UNIFIED MASTER TABLE DISPLAY ---
+    st.subheader("📊 Master Universe Table")
+
+    master_rows = []
+    for category in categories:
+        tickers = st.session_state.scan_pool.get(category, [])
+        for t in tickers:
+            master_rows.append({
+                "Delete": False,
+                "⭐ Fav": t in st.session_state.favorites,
+                "Ticker": t,
+                "Group / Category": category,
+                "Account Type": st.session_state.account_types.get(t, "Brokerage")
+            })
+
+    if master_rows:
+        master_df = pd.DataFrame(master_rows)
+
+        edited_df = st.data_editor(
+            master_df,
+            key="master_universe_editor",
+            hide_index=True,
+            column_config={
+                "Delete": st.column_config.CheckboxColumn(
+                    "Delete?",
+                    help="Check to delete ticker",
+                    default=False
+                ),
+                "⭐ Fav": st.column_config.CheckboxColumn(
+                    "⭐ Fav",
+                    help="Check to mark as Favorite",
+                    default=False
+                ),
+                "Ticker": st.column_config.TextColumn(
+                    "Ticker Symbol",
+                    disabled=True
+                ),
+                "Group / Category": st.column_config.SelectboxColumn(
+                    "Group / Category",
+                    options=categories,
+                    required=True
+                ),
+                "Account Type": st.column_config.SelectboxColumn(
+                    "Account Type Bucket",
+                    options=["Brokerage", "IRA", "Roth/HSA"],
+                    required=True
+                )
+            },
+            use_container_width=True
+        )
+
+        # Handle Bulk Deletions
+        col_del, col_space = st.columns([1, 3])
+        with col_del:
+            selected_deletes = edited_df[edited_df["Delete"] == True]
+            if not selected_deletes.empty:
+                to_delete = selected_deletes["Ticker"].tolist()
+                if st.button(f"🗑️ Delete Selected ({len(to_delete)}) Tickers", use_container_width=True):
+                    for cat in categories:
+                        st.session_state.scan_pool[cat] = [
+                            t for t in st.session_state.scan_pool[cat] if t not in to_delete
+                        ]
+                    st.session_state.favorites = [t for t in st.session_state.favorites if t not in to_delete]
+                    for t in to_delete:
+                        st.session_state.account_types.pop(t, None)
+
+                    # Persist changes
+                    st.session_state.scan_pool["_favorites"] = st.session_state.favorites
+                    st.session_state.scan_pool["_account_types"] = st.session_state.account_types
+                    save_universe(st.session_state.scan_pool)
+                    st.success(f"Deleted {', '.join(to_delete)} from universe!")
+                    st.rerun()
+
+        # Sync Table State Edits (Favorites, Categories, Account Types)
+        has_changes = False
+
+        # 1. Sync Favorites
+        updated_favs = edited_df[edited_df["⭐ Fav"] == True]["Ticker"].tolist()
+        if set(updated_favs) != set(st.session_state.favorites):
+            st.session_state.favorites = updated_favs
+            st.session_state.scan_pool["_favorites"] = st.session_state.favorites
+            has_changes = True
+
+        # 2. Sync Account Types and Group Moves
+        for _, row in edited_df.iterrows():
+            ticker = row["Ticker"]
+            new_acct = row["Account Type"]
+            new_cat = row["Group / Category"]
+
+            if st.session_state.account_types.get(ticker) != new_acct:
+                st.session_state.account_types[ticker] = new_acct
+                has_changes = True
+
+            # Group Category Reassignment
+            current_cat = next((cat for cat in categories if ticker in st.session_state.scan_pool[cat]), None)
+            if current_cat and current_cat != new_cat:
+                st.session_state.scan_pool[current_cat].remove(ticker)
+                st.session_state.scan_pool[new_cat].append(ticker)
+                has_changes = True
+
+        if has_changes:
+            st.session_state.scan_pool["_account_types"] = st.session_state.account_types
+            save_universe(st.session_state.scan_pool)
+            st.rerun()
+
+    else:
+        st.info("No tickers found in universe. Add one above using the Quick Add form!")
