@@ -34,6 +34,19 @@ from logic.tier1_screener import get_tax_location_recommendation
 from logic.tier2_signals import calculate_tier2_signals
 from logic.macro_overlay import evaluate_market_regime, apply_macro_regime_overlay
 
+# Helper to map tax recommendations to concise tax classifications
+def format_tax_recommendation(rec_text: str) -> str:
+    rec_lower = rec_text.lower()
+    if "qualified" in rec_lower:
+        return "Qualified Dividends"
+    elif "capital gains" in rec_lower or "equity" in rec_lower or "long-term" in rec_lower:
+        return "Long-Term Capital Gains"
+    elif "ordinary" in rec_lower or "income" in rec_lower or "bond" in rec_lower or "reit" in rec_lower:
+        return "Ordinary Income"
+    elif "exempt" in rec_lower or "deferred" in rec_lower or "muni" in rec_lower:
+        return "Tax-Exempt / Deferred"
+    return "Ordinary Income"
+
 # Initialize persistent session state from JSON disk storage
 if "scan_pool" not in st.session_state:
     st.session_state.scan_pool = load_universe()
@@ -92,7 +105,7 @@ sma_slow_window = st.sidebar.number_input("Slow SMA (Days)", min_value=50, max_v
 filter_by_favs = st.sidebar.checkbox("⭐ Show Favorites Only across Dashboard", value=False)
 
 st.sidebar.markdown("---")
-st.sidebar.info("💡 **Tip:** Edits made in the ETF Universe save directly to disk and persist automatically.")
+st.sidebar.info("💡 **Tip:** Click **💾 Save Changes** under the ETF table to persist edits to disk.")
 
 
 # ==============================================================================
@@ -202,7 +215,8 @@ with tab1:
             metrics = fetch_ticker_metrics(t)
             bucket = st.session_state.account_types.get(t, "Brokerage")
             alloc = float(st.session_state.allocations.get(t, 0.0))
-            tax_rec = get_tax_location_recommendation(category, bucket)
+            raw_tax_rec = get_tax_location_recommendation(category, bucket)
+            tax_rec = format_tax_recommendation(raw_tax_rec)
 
             master_rows.append({
                 "Delete": False,
@@ -290,13 +304,46 @@ with tab1:
             use_container_width=True
         )
 
+        col_save, col_del, col_space = st.columns([1.5, 1.5, 3])
+
+        # Dedicated Save Changes Button
+        with col_save:
+            if st.button("💾 Save Changes", type="primary", use_container_width=True):
+                # Sync Favorites
+                updated_favs = edited_df[edited_df["⭐ Fav"] == True]["Ticker"].tolist()
+                st.session_state.favorites = updated_favs
+
+                # Sync Bucket, Allocation, and Category Changes
+                for _, row in edited_df.iterrows():
+                    ticker = row["Ticker"]
+                    new_bucket = row["Bucket"]
+                    new_cat = row["Group / Category"]
+                    new_alloc = float(row["Allocation (%)"])
+
+                    st.session_state.account_types[ticker] = new_bucket
+                    st.session_state.allocations[ticker] = new_alloc
+
+                    # Handle Category Transfer
+                    current_cat = next((cat for cat in categories if ticker in st.session_state.scan_pool[cat]), None)
+                    if current_cat and current_cat != new_cat:
+                        st.session_state.scan_pool[current_cat].remove(ticker)
+                        st.session_state.scan_pool[new_cat].append(ticker)
+
+                # Persist to JSON
+                st.session_state.scan_pool["_favorites"] = st.session_state.favorites
+                st.session_state.scan_pool["_account_types"] = st.session_state.account_types
+                st.session_state.scan_pool["_allocations"] = st.session_state.allocations
+                save_universe(st.session_state.scan_pool)
+
+                st.success("💾 Changes saved successfully to disk!")
+                st.rerun()
+
         # Handle Bulk Deletions
-        col_del, col_space = st.columns([1, 3])
         with col_del:
             selected_deletes = edited_df[edited_df["Delete"] == True]
             if not selected_deletes.empty:
                 to_delete = selected_deletes["Ticker"].tolist()
-                if st.button(f"🗑️ Delete Selected ({len(to_delete)}) Tickers", use_container_width=True):
+                if st.button(f"🗑️ Delete Selected ({len(to_delete)})", use_container_width=True):
                     for cat in categories:
                         st.session_state.scan_pool[cat] = [
                             t for t in st.session_state.scan_pool[cat] if t not in to_delete
@@ -313,46 +360,6 @@ with tab1:
                     save_universe(st.session_state.scan_pool)
                     st.success(f"Deleted {', '.join(to_delete)} from universe!")
                     st.rerun()
-
-        # Sync Table State Edits (Favorites, Buckets, Allocations & Categories)
-        has_changes = False
-
-        # 1. Sync Favorites
-        updated_favs = edited_df[edited_df["⭐ Fav"] == True]["Ticker"].tolist()
-        if set(updated_favs) != set(st.session_state.favorites):
-            st.session_state.favorites = updated_favs
-            st.session_state.scan_pool["_favorites"] = st.session_state.favorites
-            has_changes = True
-
-        # 2. Sync Bucket, Allocation, and Group / Category Changes
-        for _, row in edited_df.iterrows():
-            ticker = row["Ticker"]
-            new_bucket = row["Bucket"]
-            new_cat = row["Group / Category"]
-            new_alloc = float(row["Allocation (%)"])
-
-            # Bucket updates
-            if st.session_state.account_types.get(ticker) != new_bucket:
-                st.session_state.account_types[ticker] = new_bucket
-                has_changes = True
-
-            # Allocation updates
-            if float(st.session_state.allocations.get(ticker, 0.0)) != new_alloc:
-                st.session_state.allocations[ticker] = new_alloc
-                has_changes = True
-
-            # Group Category Reassignment
-            current_cat = next((cat for cat in categories if ticker in st.session_state.scan_pool[cat]), None)
-            if current_cat and current_cat != new_cat:
-                st.session_state.scan_pool[current_cat].remove(ticker)
-                st.session_state.scan_pool[new_cat].append(ticker)
-                has_changes = True
-
-        if has_changes:
-            st.session_state.scan_pool["_account_types"] = st.session_state.account_types
-            st.session_state.scan_pool["_allocations"] = st.session_state.allocations
-            save_universe(st.session_state.scan_pool)
-            st.rerun()
 
     else:
         st.info("No tickers found in universe. Add one above using the Quick Add form!")
