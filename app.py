@@ -41,8 +41,8 @@ if "scan_pool" not in st.session_state:
 if "account_types" not in st.session_state:
     st.session_state.account_types = st.session_state.scan_pool.get("_account_types", {})
 
-if "market_regions" not in st.session_state:
-    st.session_state.market_regions = st.session_state.scan_pool.get("_market_regions", {})
+if "allocations" not in st.session_state:
+    st.session_state.allocations = st.session_state.scan_pool.get("_allocations", {})
 
 if "favorites" not in st.session_state:
     st.session_state.favorites = st.session_state.scan_pool.get("_favorites", [])
@@ -155,7 +155,7 @@ with tab1:
     # --- SINGLE UNIFIED QUICK ADD SECTION ---
     st.subheader("➕ Quick Add Ticker")
     with st.form("quick_add_master_form", clear_on_submit=True):
-        col_t, col_c, col_a, col_btn = st.columns([2, 2, 2, 1.5])
+        col_t, col_c, col_a, col_pct, col_btn = st.columns([2, 2, 2, 2, 1.5])
         
         with col_t:
             add_ticker = st.text_input("Ticker Symbol", placeholder="e.g. VTI").strip().upper()
@@ -163,6 +163,8 @@ with tab1:
             add_category = st.selectbox("Group Category", options=categories)
         with col_a:
             add_account = st.selectbox("Bucket (Account Type)", options=["Brokerage", "IRA", "Roth/HSA"])
+        with col_pct:
+            add_alloc = st.number_input("Allocation (%)", min_value=0.0, max_value=100.0, value=0.0, step=1.0)
         with col_btn:
             st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
             add_submitted = st.form_submit_button("➕ Add Ticker", use_container_width=True)
@@ -172,13 +174,15 @@ with tab1:
             if add_ticker not in existing_tickers:
                 st.session_state.scan_pool[add_category].append(add_ticker)
                 st.session_state.account_types[add_ticker] = add_account
+                st.session_state.allocations[add_ticker] = add_alloc
                 
                 # Persist directly to disk
                 st.session_state.scan_pool["_account_types"] = st.session_state.account_types
+                st.session_state.scan_pool["_allocations"] = st.session_state.allocations
                 st.session_state.scan_pool["_favorites"] = st.session_state.favorites
                 save_universe(st.session_state.scan_pool)
                 
-                st.success(f"Added {add_ticker} to {add_category} ({add_account})!")
+                st.success(f"Added {add_ticker} to {add_category} ({add_account} | {add_alloc:.1f}%)!")
                 st.rerun()
             else:
                 st.warning(f"Ticker {add_ticker} already exists in the universe.")
@@ -197,13 +201,16 @@ with tab1:
 
             metrics = fetch_ticker_metrics(t)
             bucket = st.session_state.account_types.get(t, "Brokerage")
+            alloc = float(st.session_state.allocations.get(t, 0.0))
             tax_rec = get_tax_location_recommendation(category, bucket)
 
             master_rows.append({
                 "Delete": False,
                 "⭐ Fav": t in st.session_state.favorites,
                 "Bucket": bucket,
+                "Group / Category": category,
                 "Ticker": t,
+                "Allocation (%)": alloc,
                 "Expense Ratio": metrics["Expense Ratio"],
                 "AUM": metrics["AUM ($M)"],
                 "Yield": metrics["Yield (%)"],
@@ -212,6 +219,16 @@ with tab1:
 
     if master_rows:
         master_df = pd.DataFrame(master_rows)
+
+        # Total Allocation Calculation & Dynamic Warning Banner
+        total_alloc = master_df["Allocation (%)"].sum()
+        
+        if total_alloc > 100.0:
+            st.error(f"🚨 **Allocation Error:** Total allocation across all buckets is **{total_alloc:.1f}%**, which exceeds the maximum allowed **100.0%**. Please adjust individual ticker allocations.")
+        elif total_alloc < 100.0:
+            st.info(f"ℹ️ Total Portfolio Allocation: **{total_alloc:.1f}%** / 100.0% ({100.0 - total_alloc:.1f}% unallocated)")
+        else:
+            st.success(f"✅ Total Portfolio Allocation: **100.0%** (Fully Allocated)")
 
         edited_df = st.data_editor(
             master_df,
@@ -233,9 +250,22 @@ with tab1:
                     options=["Brokerage", "IRA", "Roth/HSA"],
                     required=True
                 ),
+                "Group / Category": st.column_config.SelectboxColumn(
+                    "Group / Category",
+                    options=categories,
+                    required=True
+                ),
                 "Ticker": st.column_config.TextColumn(
                     "Ticker",
                     disabled=True
+                ),
+                "Allocation (%)": st.column_config.NumberColumn(
+                    "Allocation (%)",
+                    format="%.1f%%",
+                    min_value=0.0,
+                    max_value=100.0,
+                    step=0.5,
+                    required=True
                 ),
                 "Expense Ratio": st.column_config.NumberColumn(
                     "Expense Ratio",
@@ -274,15 +304,17 @@ with tab1:
                     st.session_state.favorites = [t for t in st.session_state.favorites if t not in to_delete]
                     for t in to_delete:
                         st.session_state.account_types.pop(t, None)
+                        st.session_state.allocations.pop(t, None)
 
                     # Persist changes
                     st.session_state.scan_pool["_favorites"] = st.session_state.favorites
                     st.session_state.scan_pool["_account_types"] = st.session_state.account_types
+                    st.session_state.scan_pool["_allocations"] = st.session_state.allocations
                     save_universe(st.session_state.scan_pool)
                     st.success(f"Deleted {', '.join(to_delete)} from universe!")
                     st.rerun()
 
-        # Sync Table State Edits (Favorites & Bucket Selections)
+        # Sync Table State Edits (Favorites, Buckets, Allocations & Categories)
         has_changes = False
 
         # 1. Sync Favorites
@@ -292,17 +324,33 @@ with tab1:
             st.session_state.scan_pool["_favorites"] = st.session_state.favorites
             has_changes = True
 
-        # 2. Sync Bucket (Account Type) Selections
+        # 2. Sync Bucket, Allocation, and Group / Category Changes
         for _, row in edited_df.iterrows():
             ticker = row["Ticker"]
             new_bucket = row["Bucket"]
+            new_cat = row["Group / Category"]
+            new_alloc = float(row["Allocation (%)"])
 
+            # Bucket updates
             if st.session_state.account_types.get(ticker) != new_bucket:
                 st.session_state.account_types[ticker] = new_bucket
                 has_changes = True
 
+            # Allocation updates
+            if float(st.session_state.allocations.get(ticker, 0.0)) != new_alloc:
+                st.session_state.allocations[ticker] = new_alloc
+                has_changes = True
+
+            # Group Category Reassignment
+            current_cat = next((cat for cat in categories if ticker in st.session_state.scan_pool[cat]), None)
+            if current_cat and current_cat != new_cat:
+                st.session_state.scan_pool[current_cat].remove(ticker)
+                st.session_state.scan_pool[new_cat].append(ticker)
+                has_changes = True
+
         if has_changes:
             st.session_state.scan_pool["_account_types"] = st.session_state.account_types
+            st.session_state.scan_pool["_allocations"] = st.session_state.allocations
             save_universe(st.session_state.scan_pool)
             st.rerun()
 
@@ -351,9 +399,10 @@ with tab2:
 
                             fav_icon = "⭐ " if ticker in st.session_state.favorites else ""
                             acct_tag = f" ({st.session_state.account_types.get(ticker, 'Brokerage')})"
+                            alloc_tag = f" [{st.session_state.allocations.get(ticker, 0.0):.1f}%]"
                             
                             st.metric(
-                                label=f"{fav_icon}{ticker}{acct_tag}",
+                                label=f"{fav_icon}{ticker}{acct_tag}{alloc_tag}",
                                 value=final_signal["Rating"],
                                 delta=f"Score: {final_signal['Composite_Score']:.1f}/100"
                             )
