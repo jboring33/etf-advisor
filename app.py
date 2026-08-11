@@ -25,7 +25,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- CUSTOM BLUE THEME INJECTION ---
+# --- CUSTOM BLUE THEME & TABLE RESPONSIVENESS INJECTION ---
 st.markdown("""
 <style>
     /* Primary Save Button Blue Override */
@@ -46,13 +46,12 @@ st.markdown("""
         border-color: #1E88E5 !important;
     }
 
-    /* Wrap Table Column Headers and Cells */
-    div[data-testid="stTable"] th, 
-    div[data-testid="stDataEditor"] th,
-    div[data-testid="stDataEditor"] [role="columnheader"] {
+    /* Force headers to wrap cleanly and prevent header truncation */
+    [data-testid="stDataEditor"] div[role="columnheader"] {
         white-space: normal !important;
-        word-wrap: break-word !important;
+        word-break: break-word !important;
         text-align: center !important;
+        line-height: 1.2 !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -265,43 +264,43 @@ with tab1:
             column_config={
                 "Delete": st.column_config.CheckboxColumn(
                     "Del",
-                    width="small",
+                    width=45,
                     help="Check to delete ticker",
                     default=False
                 ),
                 "⭐ Fav": st.column_config.CheckboxColumn(
                     "Fav",
-                    width="small",
+                    width=45,
                     help="Check to mark as Favorite",
                     default=False
                 ),
                 "Bucket": st.column_config.SelectboxColumn(
                     "Bucket",
-                    width="medium",
+                    width=110,
                     options=["Brokerage", "IRA", "Roth/HSA"],
                     required=True
                 ),
                 "Ticker Symbol": st.column_config.TextColumn(
                     "Ticker Symbol",
-                    width="small",
+                    width=85,
                     disabled=True,
                     help="ETF Ticker Symbol"
                 ),
                 "Morningstar 3Yr Rating": st.column_config.TextColumn(
                     "Morningstar 3Yr Rating",
-                    width="medium",
+                    width=135,
                     disabled=True,
                     help="Morningstar 3-year risk-adjusted star rating"
                 ),
                 "Group / Category": st.column_config.SelectboxColumn(
-                    "Group / Category",
-                    width="medium",
+                    "Group /\nCategory",
+                    width=140,
                     options=categories,
                     required=True
                 ),
                 "Allocation (%)": st.column_config.NumberColumn(
                     "Alloc (%)",
-                    width="small",
+                    width=80,
                     format="%.1f%%",
                     min_value=0.0,
                     max_value=100.0,
@@ -310,25 +309,25 @@ with tab1:
                 ),
                 "Expense Ratio": st.column_config.NumberColumn(
                     "Exp Ratio",
-                    width="small",
+                    width=75,
                     format="%.2f%%",
                     disabled=True
                 ),
                 "AUM": st.column_config.NumberColumn(
                     "AUM ($M)",
-                    width="small",
+                    width=95,
                     format="$%.0fM",
                     disabled=True
                 ),
                 "Yield": st.column_config.NumberColumn(
                     "Yield (%)",
-                    width="small",
+                    width=75,
                     format="%.2f%%",
                     disabled=True
                 ),
                 "Tax Recommendation": st.column_config.TextColumn(
                     "Tax Placement Rec",
-                    width="medium",
+                    width=170,
                     disabled=True
                 )
             },
