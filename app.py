@@ -61,22 +61,8 @@ from config.portfolio import (
     load_universe, 
     save_universe
 )
-from logic.tier1_screener import get_tax_location_recommendation
 from logic.tier2_signals import calculate_tier2_signals
 from logic.macro_overlay import evaluate_market_regime, apply_macro_regime_overlay
-
-# Helper to map tax recommendations to concise tax classifications
-def format_tax_recommendation(rec_text: str) -> str:
-    rec_lower = rec_text.lower()
-    if "qualified" in rec_lower:
-        return "Qualified Dividends"
-    elif "capital gains" in rec_lower or "equity" in rec_lower or "long-term" in rec_lower:
-        return "Long-Term Capital Gains"
-    elif "ordinary" in rec_lower or "income" in rec_lower or "bond" in rec_lower or "reit" in rec_lower:
-        return "Ordinary Income"
-    elif "exempt" in rec_lower or "deferred" in rec_lower or "muni" in rec_lower:
-        return "Tax-Exempt / Deferred"
-    return "Ordinary Income"
 
 # Initialize persistent session state from JSON disk storage
 if "scan_pool" not in st.session_state:
@@ -165,7 +151,7 @@ st.sidebar.info("💡 **Tip:** Click **💾 Save Changes** under the ETF table t
 # MAIN DASHBOARD HEADER
 # ==============================================================================
 st.title("📈 ETF Asset Location & Tactical Screener")
-st.caption("A decision framework for tax-efficient asset placement and momentum timing.")
+st.caption("A decision framework for portfolio asset placement and momentum timing.")
 
 # 3-Tab Streamlined Layout
 tab1, tab2, tab3 = st.tabs([
@@ -176,11 +162,11 @@ tab1, tab2, tab3 = st.tabs([
 
 
 # ==============================================================================
-# TAB 1: ETF UNIVERSE (Unified Screener, Location & Dynamic Management)
+# TAB 1: ETF UNIVERSE (Unified Screener & Dynamic Management)
 # ==============================================================================
 with tab1:
-    st.header("🌐 ETF Universe & Tax Location Screener")
-    st.caption("Manage your tickers, view live fundamental metrics, assign account buckets, and evaluate tax placement.")
+    st.header("🌐 ETF Universe Screener")
+    st.caption("Manage your tickers, view live fundamental metrics, assign account buckets, and define categories.")
 
     categories = get_active_categories()
     region_options = ["US", "Emerging", "Developed", "ex-China"]
@@ -240,8 +226,6 @@ with tab1:
             bucket = st.session_state.account_types.get(t, "Brokerage")
             region = st.session_state.regions.get(t, "US")
             alloc = float(st.session_state.allocations.get(t, 0.0))
-            raw_tax_rec = get_tax_location_recommendation(category, bucket)
-            tax_rec = format_tax_recommendation(raw_tax_rec)
 
             master_rows.append({
                 "Delete": False,
@@ -255,8 +239,7 @@ with tab1:
                 "Allocation (%)": alloc,
                 "Expense Ratio": metrics["Expense Ratio"],
                 "AUM": metrics["AUM ($M)"],
-                "Yield": metrics["Yield (%)"],
-                "Taxation": tax_rec
+                "Yield": metrics["Yield (%)"]
             })
 
     if master_rows:
@@ -303,7 +286,7 @@ with tab1:
                 ),
                 "Name": st.column_config.TextColumn(
                     "Name",
-                    width=150,
+                    width=160,
                     disabled=True,
                     help="Full Fund Name"
                 ),
@@ -351,16 +334,11 @@ with tab1:
                     width=75,
                     format="%.2f%%",
                     disabled=True
-                ),
-                "Taxation": st.column_config.TextColumn(
-                    "Taxation",
-                    width=140,
-                    disabled=True
                 )
             },
             column_order=[
                 "Delete", "⭐ Fav", "Bucket", "Ticker", "Name", "Morningstar 3 yr", 
-                "Type", "Region", "Allocation (%)", "Expense Ratio", "AUM", "Yield", "Taxation"
+                "Type", "Region", "Allocation (%)", "Expense Ratio", "AUM", "Yield"
             ],
             use_container_width=True
         )
