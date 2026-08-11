@@ -191,7 +191,7 @@ with tab1:
         col_t, col_c, col_r, col_a, col_pct, col_btn = st.columns([2, 2, 2, 2, 2, 1.5])
         
         with col_t:
-            add_ticker = st.text_input("Ticker Symbol", placeholder="e.g. VTI").strip().upper()
+            add_ticker = st.text_input("Ticker", placeholder="e.g. VTI").strip().upper()
         with col_c:
             add_category = st.selectbox("Type", options=categories)
         with col_r:
@@ -247,9 +247,9 @@ with tab1:
                 "Delete": False,
                 "⭐ Fav": t in st.session_state.favorites,
                 "Bucket": bucket,
-                "Ticker Symbol": t,
-                "Ticker Name": metrics["Full Name"],  # Hover flyover source
-                "Morningstar 3Yr Rating": metrics["3Yr Rating"],
+                "Ticker": t,
+                "Name": metrics["Full Name"],
+                "Morningstar 3 yr": metrics["3Yr Rating"],
                 "Type": category,
                 "Region": region,
                 "Allocation (%)": alloc,
@@ -295,20 +295,21 @@ with tab1:
                     options=["Brokerage", "IRA", "Roth/HSA"],
                     required=True
                 ),
-                "Ticker Symbol": st.column_config.TextColumn(
-                    "Ticker Symbol",
-                    width=85,
+                "Ticker": st.column_config.TextColumn(
+                    "Ticker",
+                    width=75,
                     disabled=True,
-                    help="Hover over ticker cell to view full fund name"
+                    help="ETF Ticker Symbol"
                 ),
-                "Ticker Name": st.column_config.TextColumn(
-                    "Ticker Name",
-                    help="Full Fund/Asset Name",
-                    width=1  # Compact hidden column used for hover tooltip
+                "Name": st.column_config.TextColumn(
+                    "Name",
+                    width=150,
+                    disabled=True,
+                    help="Full Fund Name"
                 ),
-                "Morningstar 3Yr Rating": st.column_config.TextColumn(
-                    "Morningstar 3Yr Rating",
-                    width=135,
+                "Morningstar 3 yr": st.column_config.TextColumn(
+                    "Morningstar 3 yr",
+                    width=120,
                     disabled=True,
                     help="Morningstar 3-year risk-adjusted star rating"
                 ),
@@ -320,7 +321,7 @@ with tab1:
                 ),
                 "Region": st.column_config.SelectboxColumn(
                     "Region",
-                    width=110,
+                    width=100,
                     options=region_options,
                     required=True
                 ),
@@ -341,7 +342,7 @@ with tab1:
                 ),
                 "AUM": st.column_config.NumberColumn(
                     "AUM ($M)",
-                    width=90,
+                    width=85,
                     format="$%.0fM",
                     disabled=True
                 ),
@@ -353,12 +354,12 @@ with tab1:
                 ),
                 "Taxation": st.column_config.TextColumn(
                     "Taxation",
-                    width=150,
+                    width=140,
                     disabled=True
                 )
             },
             column_order=[
-                "Delete", "⭐ Fav", "Bucket", "Ticker Symbol", "Morningstar 3Yr Rating", 
+                "Delete", "⭐ Fav", "Bucket", "Ticker", "Name", "Morningstar 3 yr", 
                 "Type", "Region", "Allocation (%)", "Expense Ratio", "AUM", "Yield", "Taxation"
             ],
             use_container_width=True
@@ -370,12 +371,12 @@ with tab1:
         with col_save:
             if st.button("💾 Save Changes", type="primary", use_container_width=True):
                 # Sync Favorites
-                updated_favs = edited_df[edited_df["⭐ Fav"] == True]["Ticker Symbol"].tolist()
+                updated_favs = edited_df[edited_df["⭐ Fav"] == True]["Ticker"].tolist()
                 st.session_state.favorites = updated_favs
 
                 # Sync Bucket, Allocation, Region, and Category Changes
                 for _, row in edited_df.iterrows():
-                    ticker = row["Ticker Symbol"]
+                    ticker = row["Ticker"]
                     new_bucket = row["Bucket"]
                     new_type = row["Type"]
                     new_region = row["Region"]
@@ -405,7 +406,7 @@ with tab1:
         with col_del:
             selected_deletes = edited_df[edited_df["Delete"] == True]
             if not selected_deletes.empty:
-                to_delete = selected_deletes["Ticker Symbol"].tolist()
+                to_delete = selected_deletes["Ticker"].tolist()
                 if st.button(f"🗑️ Delete Selected ({len(to_delete)})", use_container_width=True):
                     for cat in categories:
                         st.session_state.scan_pool[cat] = [
