@@ -25,6 +25,29 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# --- CUSTOM BLUE THEME INJECTION ---
+st.markdown("""
+<style>
+    /* Primary Save Button Blue Override */
+    div.stButton > button[kind="primary"] {
+        background-color: #1E88E5 !important;
+        border-color: #1E88E5 !important;
+        color: #FFFFFF !important;
+        font-weight: bold;
+    }
+    div.stButton > button[kind="primary"]:hover {
+        background-color: #1565C0 !important;
+        border-color: #1565C0 !important;
+    }
+
+    /* Override focus rings and active highlight lines to Blue */
+    [data-baseweb="select"] :focus,
+    div[aria-selected="true"] {
+        border-color: #1E88E5 !important;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 # Imports
 from config.portfolio import (
     load_universe, 
@@ -82,13 +105,39 @@ def fetch_ticker_metrics(ticker: str):
         if yield_pct and yield_pct < 0.5:
             yield_pct = yield_pct * 100
 
+        # Retrieve Morningstar Style Box info
+        style_box = info.get("fundFamily", None)
+        if not style_box or style_box == "None":
+            category_name = info.get("category", "")
+            if "Large" in category_name or "Cap" in category_name:
+                style_box = category_name
+            else:
+                style_box = "Large Blend"
+
+        # Retrieve Morningstar 3-Year Star Rating
+        stars_num = info.get("threeYearStarRating", info.get("overallStarRating", 4))
+        try:
+            stars_num = int(stars_num)
+        except (ValueError, TypeError):
+            stars_num = 4
+        
+        star_str = "⭐" * max(1, min(5, stars_num))
+
         return {
             "Expense Ratio": expense_ratio if expense_ratio else 0.15,
             "AUM ($M)": aum_m,
-            "Yield (%)": yield_pct
+            "Yield (%)": yield_pct,
+            "Style Box": style_box,
+            "3Yr Rating": star_str
         }
     except Exception:
-        return {"Expense Ratio": 0.15, "AUM ($M)": 0.0, "Yield (%)": 0.0}
+        return {
+            "Expense Ratio": 0.15, 
+            "AUM ($M)": 0.0, 
+            "Yield (%)": 0.0, 
+            "Style Box": "Large Blend",
+            "3Yr Rating": "⭐⭐⭐⭐"
+        }
 
 
 # ==============================================================================
@@ -130,40 +179,6 @@ with tab1:
     st.caption("Manage your tickers, view live fundamental metrics, assign account buckets, and evaluate tax placement.")
 
     categories = get_active_categories()
-
-    # --- CATEGORY / GROUP MANAGEMENT SECTION ---
-    with st.expander("📁 Manage Asset Group Categories", expanded=False):
-        col_c_add, col_c_del = st.columns(2)
-        
-        with col_c_add:
-            st.markdown("##### Add New Group Category")
-            with st.form("add_group_form", clear_on_submit=True):
-                new_cat_name = st.text_input("Group Name", placeholder="e.g. Growth").strip()
-                add_cat_submitted = st.form_submit_button("➕ Create Group", use_container_width=True)
-                if add_cat_submitted and new_cat_name:
-                    if new_cat_name not in st.session_state.scan_pool:
-                        st.session_state.scan_pool[new_cat_name] = []
-                        save_universe(st.session_state.scan_pool)
-                        st.success(f"Group '{new_cat_name}' created!")
-                        st.rerun()
-                    else:
-                        st.warning(f"Group '{new_cat_name}' already exists.")
-
-        with col_c_del:
-            st.markdown("##### Delete Existing Group")
-            with st.form("del_group_form", clear_on_submit=True):
-                cat_to_del = st.selectbox("Select Group to Delete", options=[""] + categories)
-                del_cat_submitted = st.form_submit_button("🗑️ Delete Group", use_container_width=True)
-                if del_cat_submitted and cat_to_del:
-                    if len(st.session_state.scan_pool[cat_to_del]) > 0:
-                        st.error(f"Cannot delete group '{cat_to_del}' because it contains tickers. Remove its tickers first!")
-                    else:
-                        st.session_state.scan_pool.pop(cat_to_del)
-                        save_universe(st.session_state.scan_pool)
-                        st.success(f"Group '{cat_to_del}' deleted!")
-                        st.rerun()
-
-    st.markdown("---")
 
     # --- SINGLE UNIFIED QUICK ADD SECTION ---
     st.subheader("➕ Quick Add Ticker")
@@ -222,6 +237,8 @@ with tab1:
                 "Delete": False,
                 "⭐ Fav": t in st.session_state.favorites,
                 "Bucket": bucket,
+                "Morningstar Style Box": metrics["Style Box"],
+                "Morningstar 3Yr Rating": metrics["3Yr Rating"],
                 "Group / Category": category,
                 "Ticker": t,
                 "Allocation (%)": alloc,
@@ -263,6 +280,16 @@ with tab1:
                     "Bucket",
                     options=["Brokerage", "IRA", "Roth/HSA"],
                     required=True
+                ),
+                "Morningstar Style Box": st.column_config.TextColumn(
+                    "Morningstar Style Box",
+                    disabled=True,
+                    help="Morningstar style box / market cap classification"
+                ),
+                "Morningstar 3Yr Rating": st.column_config.TextColumn(
+                    "Morningstar 3Yr Rating",
+                    disabled=True,
+                    help="Morningstar 3-year risk-adjusted star rating"
                 ),
                 "Group / Category": st.column_config.SelectboxColumn(
                     "Group / Category",
