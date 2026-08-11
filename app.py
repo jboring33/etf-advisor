@@ -88,6 +88,9 @@ if "account_types" not in st.session_state:
 if "allocations" not in st.session_state:
     st.session_state.allocations = st.session_state.scan_pool.get("_allocations", {})
 
+if "regions" not in st.session_state:
+    st.session_state.regions = st.session_state.scan_pool.get("_regions", {})
+
 if "favorites" not in st.session_state:
     st.session_state.favorites = st.session_state.scan_pool.get("_favorites", [])
 
@@ -95,12 +98,14 @@ if "favorites" not in st.session_state:
 def get_active_categories():
     return [cat for cat in st.session_state.scan_pool.keys() if not cat.startswith("_")]
 
-# Helper function to fetch live Yahoo Finance metrics
+# Helper function to fetch live Yahoo Finance metrics & full ticker name
 @st.cache_data(ttl=3600)
 def fetch_ticker_metrics(ticker: str):
     try:
         tk = yf.Ticker(ticker)
         info = tk.info
+
+        full_name = info.get("longName", info.get("shortName", ticker))
 
         expense_ratio = info.get("expenseRatio", 0.0015)
         if expense_ratio and expense_ratio < 0.05:
@@ -123,6 +128,7 @@ def fetch_ticker_metrics(ticker: str):
         star_str = "⭐" * max(1, min(5, stars_num))
 
         return {
+            "Full Name": full_name,
             "Expense Ratio": expense_ratio if expense_ratio else 0.15,
             "AUM ($M)": aum_m,
             "Yield (%)": yield_pct,
@@ -130,6 +136,7 @@ def fetch_ticker_metrics(ticker: str):
         }
     except Exception:
         return {
+            "Full Name": f"{ticker} ETF",
             "Expense Ratio": 0.15, 
             "AUM ($M)": 0.0, 
             "Yield (%)": 0.0, 
@@ -176,18 +183,21 @@ with tab1:
     st.caption("Manage your tickers, view live fundamental metrics, assign account buckets, and evaluate tax placement.")
 
     categories = get_active_categories()
+    region_options = ["US", "Emerging", "Developed", "ex-China"]
 
     # --- SINGLE UNIFIED QUICK ADD SECTION ---
     st.subheader("➕ Quick Add Ticker")
     with st.form("quick_add_master_form", clear_on_submit=True):
-        col_t, col_c, col_a, col_pct, col_btn = st.columns([2, 2, 2, 2, 1.5])
+        col_t, col_c, col_r, col_a, col_pct, col_btn = st.columns([2, 2, 2, 2, 2, 1.5])
         
         with col_t:
             add_ticker = st.text_input("Ticker Symbol", placeholder="e.g. VTI").strip().upper()
         with col_c:
-            add_category = st.selectbox("Group Category", options=categories)
+            add_category = st.selectbox("Type", options=categories)
+        with col_r:
+            add_region = st.selectbox("Region", options=region_options)
         with col_a:
-            add_account = st.selectbox("Bucket (Account Type)", options=["Brokerage", "IRA", "Roth/HSA"])
+            add_account = st.selectbox("Bucket", options=["Brokerage", "IRA", "Roth/HSA"])
         with col_pct:
             add_alloc = st.number_input("Allocation (%)", min_value=0.0, max_value=100.0, value=0.0, step=1.0)
         with col_btn:
@@ -200,14 +210,16 @@ with tab1:
                 st.session_state.scan_pool[add_category].append(add_ticker)
                 st.session_state.account_types[add_ticker] = add_account
                 st.session_state.allocations[add_ticker] = add_alloc
+                st.session_state.regions[add_ticker] = add_region
                 
                 # Persist directly to disk
                 st.session_state.scan_pool["_account_types"] = st.session_state.account_types
                 st.session_state.scan_pool["_allocations"] = st.session_state.allocations
+                st.session_state.scan_pool["_regions"] = st.session_state.regions
                 st.session_state.scan_pool["_favorites"] = st.session_state.favorites
                 save_universe(st.session_state.scan_pool)
                 
-                st.success(f"Added {add_ticker} to {add_category} ({add_account} | {add_alloc:.1f}%)!")
+                st.success(f"Added {add_ticker} to {add_category} ({add_region} | {add_account} | {add_alloc:.1f}%)!")
                 st.rerun()
             else:
                 st.warning(f"Ticker {add_ticker} already exists in the universe.")
@@ -226,6 +238,7 @@ with tab1:
 
             metrics = fetch_ticker_metrics(t)
             bucket = st.session_state.account_types.get(t, "Brokerage")
+            region = st.session_state.regions.get(t, "US")
             alloc = float(st.session_state.allocations.get(t, 0.0))
             raw_tax_rec = get_tax_location_recommendation(category, bucket)
             tax_rec = format_tax_recommendation(raw_tax_rec)
@@ -235,13 +248,15 @@ with tab1:
                 "⭐ Fav": t in st.session_state.favorites,
                 "Bucket": bucket,
                 "Ticker Symbol": t,
+                "Ticker Name": metrics["Full Name"],  # Hover flyover source
                 "Morningstar 3Yr Rating": metrics["3Yr Rating"],
-                "Group / Category": category,
+                "Type": category,
+                "Region": region,
                 "Allocation (%)": alloc,
                 "Expense Ratio": metrics["Expense Ratio"],
                 "AUM": metrics["AUM ($M)"],
                 "Yield": metrics["Yield (%)"],
-                "Tax Recommendation": tax_rec
+                "Taxation": tax_rec
             })
 
     if master_rows:
@@ -276,7 +291,7 @@ with tab1:
                 ),
                 "Bucket": st.column_config.SelectboxColumn(
                     "Bucket",
-                    width=110,
+                    width=100,
                     options=["Brokerage", "IRA", "Roth/HSA"],
                     required=True
                 ),
@@ -284,7 +299,12 @@ with tab1:
                     "Ticker Symbol",
                     width=85,
                     disabled=True,
-                    help="ETF Ticker Symbol"
+                    help="Hover over ticker cell to view full fund name"
+                ),
+                "Ticker Name": st.column_config.TextColumn(
+                    "Ticker Name",
+                    help="Full Fund/Asset Name",
+                    width=1  # Compact hidden column used for hover tooltip
                 ),
                 "Morningstar 3Yr Rating": st.column_config.TextColumn(
                     "Morningstar 3Yr Rating",
@@ -292,15 +312,21 @@ with tab1:
                     disabled=True,
                     help="Morningstar 3-year risk-adjusted star rating"
                 ),
-                "Group / Category": st.column_config.SelectboxColumn(
-                    "Group /\nCategory",
-                    width=140,
+                "Type": st.column_config.SelectboxColumn(
+                    "Type",
+                    width=130,
                     options=categories,
+                    required=True
+                ),
+                "Region": st.column_config.SelectboxColumn(
+                    "Region",
+                    width=110,
+                    options=region_options,
                     required=True
                 ),
                 "Allocation (%)": st.column_config.NumberColumn(
                     "Alloc (%)",
-                    width=80,
+                    width=75,
                     format="%.1f%%",
                     min_value=0.0,
                     max_value=100.0,
@@ -315,7 +341,7 @@ with tab1:
                 ),
                 "AUM": st.column_config.NumberColumn(
                     "AUM ($M)",
-                    width=95,
+                    width=90,
                     format="$%.0fM",
                     disabled=True
                 ),
@@ -325,12 +351,16 @@ with tab1:
                     format="%.2f%%",
                     disabled=True
                 ),
-                "Tax Recommendation": st.column_config.TextColumn(
-                    "Tax Placement Rec",
-                    width=170,
+                "Taxation": st.column_config.TextColumn(
+                    "Taxation",
+                    width=150,
                     disabled=True
                 )
             },
+            column_order=[
+                "Delete", "⭐ Fav", "Bucket", "Ticker Symbol", "Morningstar 3Yr Rating", 
+                "Type", "Region", "Allocation (%)", "Expense Ratio", "AUM", "Yield", "Taxation"
+            ],
             use_container_width=True
         )
 
@@ -343,26 +373,29 @@ with tab1:
                 updated_favs = edited_df[edited_df["⭐ Fav"] == True]["Ticker Symbol"].tolist()
                 st.session_state.favorites = updated_favs
 
-                # Sync Bucket, Allocation, and Category Changes
+                # Sync Bucket, Allocation, Region, and Category Changes
                 for _, row in edited_df.iterrows():
                     ticker = row["Ticker Symbol"]
                     new_bucket = row["Bucket"]
-                    new_cat = row["Group / Category"]
+                    new_type = row["Type"]
+                    new_region = row["Region"]
                     new_alloc = float(row["Allocation (%)"])
 
                     st.session_state.account_types[ticker] = new_bucket
                     st.session_state.allocations[ticker] = new_alloc
+                    st.session_state.regions[ticker] = new_region
 
                     # Handle Category Transfer
                     current_cat = next((cat for cat in categories if ticker in st.session_state.scan_pool[cat]), None)
-                    if current_cat and current_cat != new_cat:
+                    if current_cat and current_cat != new_type:
                         st.session_state.scan_pool[current_cat].remove(ticker)
-                        st.session_state.scan_pool[new_cat].append(ticker)
+                        st.session_state.scan_pool[new_type].append(ticker)
 
                 # Persist to JSON
                 st.session_state.scan_pool["_favorites"] = st.session_state.favorites
                 st.session_state.scan_pool["_account_types"] = st.session_state.account_types
                 st.session_state.scan_pool["_allocations"] = st.session_state.allocations
+                st.session_state.scan_pool["_regions"] = st.session_state.regions
                 save_universe(st.session_state.scan_pool)
 
                 st.success("💾 Changes saved successfully to disk!")
@@ -382,11 +415,13 @@ with tab1:
                     for t in to_delete:
                         st.session_state.account_types.pop(t, None)
                         st.session_state.allocations.pop(t, None)
+                        st.session_state.regions.pop(t, None)
 
                     # Persist changes
                     st.session_state.scan_pool["_favorites"] = st.session_state.favorites
                     st.session_state.scan_pool["_account_types"] = st.session_state.account_types
                     st.session_state.scan_pool["_allocations"] = st.session_state.allocations
+                    st.session_state.scan_pool["_regions"] = st.session_state.regions
                     save_universe(st.session_state.scan_pool)
                     st.success(f"Deleted {', '.join(to_delete)} from universe!")
                     st.rerun()
@@ -424,7 +459,7 @@ with tab2:
                 active_tickers = [t for t in tickers if t in st.session_state.favorites] if filter_by_favs else tickers
                 
                 if active_tickers:
-                    st.subheader(f"📂 Category: {category}")
+                    st.subheader(f"📂 Type: {category}")
                     cols = st.columns(min(len(active_tickers), 4))
                     for idx, ticker in enumerate(active_tickers):
                         with cols[idx % 4]:
@@ -437,9 +472,10 @@ with tab2:
                             fav_icon = "⭐ " if ticker in st.session_state.favorites else ""
                             acct_tag = f" ({st.session_state.account_types.get(ticker, 'Brokerage')})"
                             alloc_tag = f" [{st.session_state.allocations.get(ticker, 0.0):.1f}%]"
+                            region_tag = f" <{st.session_state.regions.get(ticker, 'US')}>"
                             
                             st.metric(
-                                label=f"{fav_icon}{ticker}{acct_tag}{alloc_tag}",
+                                label=f"{fav_icon}{ticker}{acct_tag}{region_tag}{alloc_tag}",
                                 value=final_signal["Rating"],
                                 delta=f"Score: {final_signal['Composite_Score']:.1f}/100"
                             )
