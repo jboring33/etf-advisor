@@ -15,27 +15,27 @@ def get_tax_location_recommendation(category: str, account_type: str) -> str:
     
     Parameters:
         category (str): ETF category (e.g., 'Core Equity', 'Income & Credit', 'Tactical / Value')
-        account_type (str): Target account type ('Taxable Brokerage', 'Tax-Deferred', 'Tax-Free')
+        account_type (str): Target account type ('Brokerage', 'IRA', 'Roth/HSA')
         
     Returns:
         str: Guidance note on tax efficiency.
     """
-    if "Taxable" in account_type:
-        if category in ["Core Equity", "Tactical / Value"]:
+    if "Brokerage" in account_type:
+        if category in ["Core Equity", "Tactical / Value", "Growth"]:
             return "Optimal: High tax efficiency (qualified dividends & long-term capital gains)."
         elif category in ["Income & Credit"]:
             return "Sub-optimal: Generates ordinary income yield; creates tax drag in taxable accounts."
         else:
             return "Moderate: Evaluate distribution yield relative to marginal tax bracket."
 
-    elif "Tax-Deferred" in account_type:  # Traditional IRA / 401(k)
+    elif "IRA" in account_type and "Roth" not in account_type:  # Traditional IRA / 401(k)
         if category in ["Income & Credit"]:
             return "Optimal: Shields high ordinary income and bond distributions from current taxes."
         else:
             return "Acceptable: Standard tax-deferred growth environment."
 
-    else:  # Tax-Free (Roth IRA / 401(k))
-        if category in ["Core Equity", "Tactical / Value"]:
+    else:  # Tax-Free (Roth IRA / Roth 401(k) / HSA)
+        if category in ["Core Equity", "Tactical / Value", "Growth"]:
             return "Optimal: Maximizes tax-free compounding on high total-return growth assets."
         else:
             return "Acceptable: Tax-free distribution environment."
@@ -55,6 +55,9 @@ def run_tier1_screening(scan_pool: dict) -> pd.DataFrame:
     rows = []
 
     for category, tickers in scan_pool.items():
+        if category.startswith("_"):
+            continue
+
         for ticker in tickers:
             try:
                 tk = yf.Ticker(ticker)
@@ -73,7 +76,7 @@ def run_tier1_screening(scan_pool: dict) -> pd.DataFrame:
                 if yield_pct and yield_pct < 0.5:
                     yield_pct = yield_pct * 100
 
-                # Basic quality filter pass criteria (e.g., Expense Ratio <= 0.50% & AUM > $50M)
+                # Basic quality filter pass criteria (Expense Ratio <= 0.50% & AUM >= $50M)
                 passed = (expense_ratio <= 0.50) and (aum_m >= 50.0 or aum_m == 0.0)
 
             except Exception:
