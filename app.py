@@ -35,6 +35,14 @@ try:
     )
     from logic.tier1_screener import fetch_etf_fundamentals, run_tier1_screen, map_account_location
     from logic.tier2_signals import fetch_historical_prices, calculate_tier2_signals
+
+    # Gracefully handle Macro Overlay if module exists
+    try:
+        from logic.macro_overlay import apply_macro_regime_overlay
+        HAS_MACRO_OVERLAY = True
+    except ImportError:
+        HAS_MACRO_OVERLAY = False
+
 except Exception as e:
     st.error(f"❌ Detailed Module Load Error: {e}")
     st.write("---")
@@ -233,13 +241,22 @@ with tab_tier2:
         st.warning("Please add ETFs to your favorites watchlist to generate tactical signals.")
     else:
         with st.spinner("Fetching price history & calculating technical indicators..."):
-            hist_data = fetch_historical_prices(st.session_state.favorites)
+            # Ensure SPY benchmark is fetched if macro overlay is present
+            fetch_list = list(set(st.session_state.favorites + (["SPY"] if HAS_MACRO_OVERLAY else [])))
+            hist_data = fetch_historical_prices(fetch_list)
             
             if not hist_data.empty:
                 signal_results = []
+                benchmark_ticker = "SPY"
+
                 for t in st.session_state.favorites:
                     if t in hist_data.columns:
                         res = calculate_tier2_signals(hist_data[t], TIER2_INDICATOR_CONFIG)
+                        
+                        # Apply macro overlay when available and benchmark price exists
+                        if HAS_MACRO_OVERLAY and benchmark_ticker in hist_data.columns:
+                            res = apply_macro_regime_overlay(res, hist_data[benchmark_ticker])
+
                         res["Ticker"] = t
                         signal_results.append(res)
                 
