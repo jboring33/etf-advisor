@@ -2,16 +2,18 @@
 app.py
 ======
 90-Day Tactical ETF Screener & Deep Dive Analysis Tool.
-Fixed: Replaced blocked yfinance API calls with direct HTTP CSV streaming.
+Fixed: Replaced fragile scraper hooks with resilient pandas_datareader (Stooq) 
+       feed to prevent Cloud hosting IP blockages.
 """
 
 import os
 import sys
-import io
-import urllib.request
+import datetime
 import streamlit as st
 import pandas as pd
 import numpy as np
+import pandas_datareader.data as web
+import yfinance as yf
 
 # Page configuration
 st.set_page_config(
@@ -67,46 +69,43 @@ DYNAMIC_MARKET_POOL = {
 
 
 # ==============================================================================
-# DIRECT CSV DATA INGESTION (BYPASSES YFINANCE API BLOCKS)
+# DATA INGESTION & ANALYTICS
 # ==============================================================================
 
 def fetch_history_safely(ticker: str) -> pd.DataFrame:
-    """Fetches historical price data directly via Stooq/Yahoo CSV endpoint to bypass Cloud IP blocks."""
+    """Fetches price history using Stooq via pandas_datareader to bypass cloud blocks."""
     ticker_clean = ticker.strip().upper()
-    
-    # Primary Source: Stooq CSV Endpoint
+    start_date = datetime.datetime.now() - datetime.timedelta(days=180)
+    end_date = datetime.datetime.now()
+
+    # Method 1: Stooq Data Reader (High Cloud Reliability)
     try:
-        url = f"https://stooq.com/q/d/l/?s={ticker_clean}.us&i=d"
-        req = urllib.request.Request(
-            url, 
-            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-        )
-        with urllib.request.urlopen(req, timeout=5) as response:
-            csv_data = response.read()
-            df = pd.read_csv(io.BytesIO(csv_data))
-            
-            if not df.empty and "Close" in df.columns and len(df) > 5:
-                df["Date"] = pd.to_datetime(df["Date"])
-                df = df.sort_values("Date").reset_index(drop=True)
-                return df
+        # Append .US for Stooq formatting if not present
+        stooq_symbol = f"{ticker_clean}.US" if not ticker_clean.startswith("^") else ticker_clean
+        df = web.DataReader(stooq_symbol, 'stooq', start=start_date, end=end_date)
+        
+        if not df.empty and "Close" in df.columns and len(df) > 5:
+            df = df.sort_index().reset_index()
+            return df
     except Exception:
         pass
 
-    # Secondary Fallback: Yahoo Finance Direct Download URL
+    # Method 2: yfinance Fallback
     try:
-        url = f"https://query1.finance.yahoo.com/v7/finance/download/{ticker_clean}?period1=1700000000&period2=9999999999&interval=1d&events=history"
-        req = urllib.request.Request(
-            url, 
-            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        df = yf.download(
+            ticker_clean, 
+            period="6m", 
+            progress=False, 
+            auto_adjust=True, 
+            threads=False, 
+            ignore_tz=True
         )
-        with urllib.request.urlopen(req, timeout=5) as response:
-            csv_data = response.read()
-            df = pd.read_csv(io.BytesIO(csv_data))
-            
-            if not df.empty and "Close" in df.columns and len(df) > 5:
-                df["Date"] = pd.to_datetime(df["Date"])
-                df = df.sort_values("Date").reset_index(drop=True)
-                return df
+        if not df.empty:
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = [col[0] for col in df.columns]
+            df = df.loc[:, ~df.columns.duplicated()]
+            if "Close" in df.columns and len(df) > 5:
+                return df.dropna(subset=["Close"]).reset_index()
     except Exception:
         pass
 
@@ -116,7 +115,7 @@ def fetch_history_safely(ticker: str) -> pd.DataFrame:
 @st.cache_data(ttl=1800)
 def fetch_fed_funds_probabilities():
     """Retrieves benchmark yields and macro posture."""
-    df = fetch_history_safely("TNX")
+    df = fetch_history_safely("^TNX")
     last_yield = 4.25
     if not df.empty and "Close" in df.columns:
         last_yield = float(df["Close"].iloc[-1])
@@ -323,3 +322,4 @@ with tab_lookup:
                 st.write("Calculated via 30-day Volume-Weighted Money Flow.")
         else:
             st.error(f"Could not retrieve ticker data for '{lookup_ticker}'. Please verify the symbol.")
+            
