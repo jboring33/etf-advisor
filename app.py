@@ -2,6 +2,7 @@
 app.py
 ======
 90-Day Tactical ETF Screener & Deep Dive Analysis Tool.
+Fixed MultiIndex column flattening and resilient yfinance parsing.
 """
 
 import os
@@ -75,24 +76,33 @@ DYNAMIC_MARKET_POOL = {
 # ==============================================================================
 
 def fetch_history_safely(ticker: str, period: str = "6m") -> pd.DataFrame:
-    """Robust price history retrieval using yf.download with Ticker fallback."""
+    """Fetches price history and guarantees a clean, single-level column DataFrame."""
     try:
+        # Download raw data
         df = yf.download(ticker, period=period, progress=False, auto_adjust=True)
+        
+        if df.empty:
+            # Fallback to Ticker object
+            tk = yf.Ticker(ticker)
+            df = tk.history(period=period)
+            
+        if df.empty:
+            return pd.DataFrame()
+
+        # Handle MultiIndex columns explicitly (flatten them out)
         if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-        if not df.empty and "Close" in df.columns:
-            return df
-    except Exception:
-        pass
+            df.columns = [col[0] for col in df.columns]
 
-    try:
-        tk = yf.Ticker(ticker)
-        df = tk.history(period=period)
-        if not df.empty and "Close" in df.columns:
+        # Standardize column naming
+        df = df.loc[:, ~df.columns.duplicated()]  # Remove duplicated columns if any
+        
+        if "Close" in df.columns:
+            # Drop NaN or empty rows
+            df = df.dropna(subset=["Close"])
             return df
-    except Exception:
-        pass
-
+    except Exception as e:
+        st.error(f"Debug Error fetching {ticker}: {str(e)}")
+        
     return pd.DataFrame()
 
 
@@ -115,22 +125,24 @@ def fetch_fed_funds_probabilities():
 
 
 def analyze_etf_technical_ema(df: pd.DataFrame):
-    """Calculates 20/50 day EMAs to check trend convergence."""
-    if len(df) < 50:
+    """Calculates 20/50 day EMAs safely with flattened series."""
+    if len(df) < 30:  # Allow 30+ days minimum to catch fast setups
         return None
 
-    close_series = df["Close"].squeeze()
+    # Force 1D pandas Series
+    close_series = pd.Series(df["Close"].values.flatten(), index=df.index)
+    
     ema20 = close_series.ewm(span=20, adjust=False).mean()
     ema50 = close_series.ewm(span=50, adjust=False).mean()
 
     latest_close = float(close_series.iloc[-1])
     latest_ema20 = float(ema20.iloc[-1])
     latest_ema50 = float(ema50.iloc[-1])
-    prev_ema20 = float(ema20.iloc[-5])
+    prev_ema20 = float(ema20.iloc[-5]) if len(ema20) >= 5 else latest_ema20
 
     gap_pct = ((latest_ema20 - latest_ema50) / latest_ema50) * 100
     is_above = latest_ema20 > latest_ema50
-    is_approaching = (not is_above) and (gap_pct > -2.0) and (latest_ema20 > prev_ema20)
+    is_approaching = (not is_above) and (gap_pct > -3.0) and (latest_ema20 >= prev_ema20)
 
     status = "Bullish (20 > 50 EMA)" if is_above else ("Approaching Cross ↗️" if is_approaching else "Bearish Lag")
     
@@ -145,28 +157,28 @@ def analyze_etf_technical_ema(df: pd.DataFrame):
 
 
 def fetch_institutional_flows_30d(df: pd.DataFrame):
-    """Calculates 30-day Volume-Weighted Accumulation score."""
-    if len(df) < 20 or "Volume" not in df.columns:
+    """Calculates 30-day Volume-Weighted Accumulation score safely."""
+    if len(df) < 15 or "Volume" not in df.columns:
         return {"Flow_Signal": "Neutral", "Net_30D_Score": 50}
 
     hist30 = df.tail(22).copy()
-    close_series = hist30["Close"].squeeze()
-    vol_series = hist30["Volume"].squeeze()
+    close_series = pd.Series(hist30["Close"].values.flatten())
+    vol_series = pd.Series(hist30["Volume"].values.flatten())
 
     price_diff = close_series.diff()
     directional_vol = np.where(price_diff >= 0, vol_series, -vol_series)
     
-    net_flow_vol = directional_vol.sum()
+    net_flow_vol = np.nan_to_num(directional_vol).sum()
     avg_vol = vol_series.mean()
     
-    if avg_vol == 0:
+    if avg_vol == 0 or np.isnan(avg_vol):
         return {"Flow_Signal": "Neutral", "Net_30D_Score": 50}
 
     flow_score = min(100, max(0, int(50 + (net_flow_vol / (avg_vol * 10)) * 50)))
     
-    if flow_score >= 65:
+    if flow_score >= 60:
         signal = "🔥 Accumulation"
-    elif flow_score <= 35:
+    elif flow_score <= 40:
         signal = "🚨 Distribution"
     else:
         signal = "➡️ Steady"
@@ -191,7 +203,7 @@ def score_etf(ticker: str):
 
     score = 0
     if tech.get("Bullish_Setup"): score += 50
-    if flows.get("Net_30D_Score", 0) >= 60: score += 50
+    if flows.get("Net_30D_Score", 0) >= 50: score += 50
 
     return {
         "Ticker": ticker,
