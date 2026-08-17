@@ -2,23 +2,16 @@
 app.py
 ======
 90-Day Tactical ETF Screener & Deep Dive Analysis Tool.
-Fixed: Cloud server rate-limit bypass (requests session + custom User-Agent)
-       and MultiIndex column flattening.
+Fixed: Replaced blocked yfinance API calls with direct HTTP CSV streaming.
 """
 
 import os
 import sys
-import datetime
-
-ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
-if ROOT_DIR not in sys.path:
-    sys.path.insert(0, ROOT_DIR)
-
+import io
+import urllib.request
 import streamlit as st
 import pandas as pd
 import numpy as np
-import yfinance as yf
-import requests
 
 # Page configuration
 st.set_page_config(
@@ -74,46 +67,48 @@ DYNAMIC_MARKET_POOL = {
 
 
 # ==============================================================================
-# ROBUST DATA FETCHING & ANALYTICS
+# DIRECT CSV DATA INGESTION (BYPASSES YFINANCE API BLOCKS)
 # ==============================================================================
 
-# Custom HTTP Session to mimic browser request & prevent Yahoo IP blocking
-yf_session = requests.Session()
-yf_session.headers.update({
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-})
-
-
-def fetch_history_safely(ticker: str, period: str = "6m") -> pd.DataFrame:
-    """Fetches price history using browser headers to avoid Cloud IP rate-limiting."""
-    df = pd.DataFrame()
+def fetch_history_safely(ticker: str) -> pd.DataFrame:
+    """Fetches historical price data directly via Stooq/Yahoo CSV endpoint to bypass Cloud IP blocks."""
+    ticker_clean = ticker.strip().upper()
     
-    # Method 1: yf.download with custom session
+    # Primary Source: Stooq CSV Endpoint
     try:
-        df = yf.download(ticker, period=period, progress=False, auto_adjust=True, session=yf_session)
+        url = f"https://stooq.com/q/d/l/?s={ticker_clean}.us&i=d"
+        req = urllib.request.Request(
+            url, 
+            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        )
+        with urllib.request.urlopen(req, timeout=5) as response:
+            csv_data = response.read()
+            df = pd.read_csv(io.BytesIO(csv_data))
+            
+            if not df.empty and "Close" in df.columns and len(df) > 5:
+                df["Date"] = pd.to_datetime(df["Date"])
+                df = df.sort_values("Date").reset_index(drop=True)
+                return df
     except Exception:
         pass
 
-    # Method 2: yf.Ticker object fallback
-    if df.empty:
-        try:
-            tk = yf.Ticker(ticker, session=yf_session)
-            df = tk.history(period=period)
-        except Exception:
-            pass
-
-    if df.empty:
-        return pd.DataFrame()
-
-    # Flatten MultiIndex headers if returned by yfinance
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = [col[0] for col in df.columns]
-
-    df = df.loc[:, ~df.columns.duplicated()]
-
-    if "Close" in df.columns:
-        df = df.dropna(subset=["Close"])
-        return df
+    # Secondary Fallback: Yahoo Finance Direct Download URL
+    try:
+        url = f"https://query1.finance.yahoo.com/v7/finance/download/{ticker_clean}?period1=1700000000&period2=9999999999&interval=1d&events=history"
+        req = urllib.request.Request(
+            url, 
+            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        )
+        with urllib.request.urlopen(req, timeout=5) as response:
+            csv_data = response.read()
+            df = pd.read_csv(io.BytesIO(csv_data))
+            
+            if not df.empty and "Close" in df.columns and len(df) > 5:
+                df["Date"] = pd.to_datetime(df["Date"])
+                df = df.sort_values("Date").reset_index(drop=True)
+                return df
+    except Exception:
+        pass
 
     return pd.DataFrame()
 
@@ -121,11 +116,10 @@ def fetch_history_safely(ticker: str, period: str = "6m") -> pd.DataFrame:
 @st.cache_data(ttl=1800)
 def fetch_fed_funds_probabilities():
     """Retrieves benchmark yields and macro posture."""
-    df = fetch_history_safely("^TNX", period="5d")
+    df = fetch_history_safely("TNX")
     last_yield = 4.25
     if not df.empty and "Close" in df.columns:
-        close_vals = df["Close"].values.flatten()
-        last_yield = float(close_vals[-1])
+        last_yield = float(df["Close"].iloc[-1])
 
     return {
         "Next Meeting": "Sep 16, 2026",
@@ -138,11 +132,11 @@ def fetch_fed_funds_probabilities():
 
 
 def analyze_etf_technical_ema(df: pd.DataFrame):
-    """Calculates 20/50 day EMAs safely with flattened 1D arrays."""
+    """Calculates 20/50 day EMAs safely."""
     if len(df) < 30:
         return None
 
-    close_series = pd.Series(df["Close"].values.flatten(), index=df.index)
+    close_series = pd.Series(df["Close"].values.flatten())
     
     ema20 = close_series.ewm(span=20, adjust=False).mean()
     ema50 = close_series.ewm(span=50, adjust=False).mean()
@@ -203,7 +197,7 @@ def fetch_institutional_flows_30d(df: pd.DataFrame):
 
 def score_etf(ticker: str):
     """Calculates composite score (0-100) based on Technicals & Volume Money Flow."""
-    df = fetch_history_safely(ticker, period="6m")
+    df = fetch_history_safely(ticker)
     if df.empty:
         return None
 
