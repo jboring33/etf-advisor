@@ -1,29 +1,22 @@
 """
 app.py
 ======
-90-Day Tactical ETF Screener & Deep Dive Analysis Tool.
-Fixed: Replaced fragile scraper hooks with resilient pandas_datareader (Stooq) 
-       feed to prevent Cloud hosting IP blockages.
+Modular ETF Rule Configurator & Scoring Engine
 """
 
-import os
-import sys
-import datetime
 import streamlit as st
 import pandas as pd
 import numpy as np
-import pandas_datareader.data as web
 import yfinance as yf
 
-# Page configuration
+# Page setup
 st.set_page_config(
-    page_title="90-Day Tactical ETF Screener",
-    page_icon="🎯",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    page_title="Custom ETF Screener & Rule Engine",
+    page_icon="⚙️",
+    layout="wide"
 )
 
-# Styling Injection
+# Custom Styling
 st.markdown("""
 <style>
     div.stButton > button[kind="primary"] {
@@ -37,289 +30,242 @@ st.markdown("""
 
 
 # ==============================================================================
-# DYNAMIC MARKET DISCOVERY WATCHLIST
-# ==============================================================================
-DYNAMIC_MARKET_POOL = {
-    # Ex-China & International
-    "EMXC": {"name": "MSCI Emerging Markets ex-China", "region": "ex-China"},
-    "VEA":  {"name": "Vanguard FTSE Developed Markets", "region": "Developed"},
-    "DIVI": {"name": "International Dividend Achievers", "region": "Developed"},
-    "INDA": {"name": "MSCI India ETF", "region": "Emerging"},
-    "EWJ":  {"name": "iShares MSCI Japan ETF", "region": "Developed"},
-    "EWT":  {"name": "iShares MSCI Taiwan ETF", "region": "Emerging"},
-    
-    # US Factor & Income
-    "VFLO": {"name": "VictoryShares Free Cash Flow ETF", "region": "US"},
-    "SCHD": {"name": "Schwab US Dividend Equity", "region": "US"},
-    "JPST": {"name": "JPMorgan Ultra-Short Income", "region": "US"},
-    "JAAA": {"name": "Janus Henderson AAA CLO ETF", "region": "US"},
-    "SCYB": {"name": "Schwab High Yield Bond ETF", "region": "US"},
-    
-    # US Sector & Momentum
-    "SMH":  {"name": "VanEck Semiconductor ETF", "region": "US"},
-    "XLK":  {"name": "Technology Select Sector SPDR", "region": "US"},
-    "XLF":  {"name": "Financial Select Sector SPDR", "region": "US"},
-    "XLE":  {"name": "Energy Select Sector SPDR", "region": "US"},
-    "XLI":  {"name": "Industrial Select Sector SPDR", "region": "US"},
-    "XLV":  {"name": "Health Care Select Sector SPDR", "region": "US"},
-    "IWM":  {"name": "iShares Russell 2000 ETF", "region": "US"},
-    "QQQ":  {"name": "Invesco QQQ Trust", "region": "US"},
-    "SPY":  {"name": "SPDR S&P 500 ETF Trust", "region": "US"},
-}
-
-
-# ==============================================================================
-# DATA INGESTION & ANALYTICS
+# DATA FETCHING ENGINE (OPTIMIZED FOR CUSTOM WATCHLISTS)
 # ==============================================================================
 
-def fetch_history_safely(ticker: str) -> pd.DataFrame:
-    """Fetches price history using Stooq via pandas_datareader to bypass cloud blocks."""
+@st.cache_data(ttl=1800, show_spinner=False)
+def fetch_etf_history(ticker: str) -> pd.DataFrame:
+    """Fetches price history using yfinance with standard fallbacks."""
     ticker_clean = ticker.strip().upper()
-    start_date = datetime.datetime.now() - datetime.timedelta(days=180)
-    end_date = datetime.datetime.now()
-
-    # Method 1: Stooq Data Reader (High Cloud Reliability)
-    try:
-        # Append .US for Stooq formatting if not present
-        stooq_symbol = f"{ticker_clean}.US" if not ticker_clean.startswith("^") else ticker_clean
-        df = web.DataReader(stooq_symbol, 'stooq', start=start_date, end=end_date)
-        
-        if not df.empty and "Close" in df.columns and len(df) > 5:
-            df = df.sort_index().reset_index()
-            return df
-    except Exception:
-        pass
-
-    # Method 2: yfinance Fallback
     try:
         df = yf.download(
-            ticker_clean, 
-            period="6m", 
-            progress=False, 
-            auto_adjust=True, 
-            threads=False, 
+            ticker_clean,
+            period="1y",
+            progress=False,
+            auto_adjust=True,
+            threads=False,
             ignore_tz=True
         )
         if not df.empty:
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = [col[0] for col in df.columns]
             df = df.loc[:, ~df.columns.duplicated()]
-            if "Close" in df.columns and len(df) > 5:
+            if "Close" in df.columns and len(df) > 30:
                 return df.dropna(subset=["Close"]).reset_index()
     except Exception:
         pass
-
     return pd.DataFrame()
 
 
-@st.cache_data(ttl=1800)
-def fetch_fed_funds_probabilities():
-    """Retrieves benchmark yields and macro posture."""
-    df = fetch_history_safely("^TNX")
-    last_yield = 4.25
-    if not df.empty and "Close" in df.columns:
-        last_yield = float(df["Close"].iloc[-1])
+# ==============================================================================
+# SCORING & RULE EVALUATION ENGINE
+# ==============================================================================
 
-    return {
-        "Next Meeting": "Sep 16, 2026",
-        "Pause Probability": "70.7%",
-        "Cut Probability (-25bps)": "29.3%",
-        "Hike Probability": "0.0%",
-        "10Yr Benchmark Yield": f"{last_yield:.2f}%",
-        "Regime Sentiment": "Pause Expected / Easing Bias"
-    }
-
-
-def analyze_etf_technical_ema(df: pd.DataFrame):
-    """Calculates 20/50 day EMAs safely."""
-    if len(df) < 30:
+def evaluate_rules(df: pd.DataFrame, params: dict):
+    """Evaluates customizable momentum, trend, and volume rules on price data."""
+    if df.empty or len(df) < params["ema_slow"]:
         return None
 
-    close_series = pd.Series(df["Close"].values.flatten())
+    close = pd.Series(df["Close"].values.flatten())
+    volume = pd.Series(df["Volume"].values.flatten()) if "Volume" in df.columns else pd.Series(np.zeros(len(df)))
+
+    # Rule 1: Fast/Slow Moving Average Trend
+    ema_fast = close.ewm(span=params["ema_fast"], adjust=False).mean()
+    ema_slow = close.ewm(span=params["ema_slow"], adjust=False).mean()
     
-    ema20 = close_series.ewm(span=20, adjust=False).mean()
-    ema50 = close_series.ewm(span=50, adjust=False).mean()
-
-    latest_close = float(close_series.iloc[-1])
-    latest_ema20 = float(ema20.iloc[-1])
-    latest_ema50 = float(ema50.iloc[-1])
-    prev_ema20 = float(ema20.iloc[-5]) if len(ema20) >= 5 else latest_ema20
-
-    gap_pct = ((latest_ema20 - latest_ema50) / latest_ema50) * 100
-    is_above = latest_ema20 > latest_ema50
-    is_approaching = (not is_above) and (gap_pct > -3.0) and (latest_ema20 >= prev_ema20)
-
-    status = "Bullish (20 > 50 EMA)" if is_above else ("Approaching Cross ↗️" if is_approaching else "Bearish Lag")
+    latest_close = float(close.iloc[-1])
+    latest_fast = float(ema_fast.iloc[-1])
+    latest_slow = float(ema_slow.iloc[-1])
     
+    ma_gap_pct = ((latest_fast - latest_slow) / latest_slow) * 100
+    rule_ma_passed = latest_fast > latest_slow
+
+    # Rule 2: Minimum N-Day Performance Return
+    lookback_days = min(params["perf_days"], len(close) - 1)
+    past_close = float(close.iloc[-lookback_days])
+    period_return_pct = ((latest_close - past_close) / past_close) * 100
+    rule_perf_passed = period_return_pct >= params["min_return_pct"]
+
+    # Rule 3: Institutional Money Flow / Accumulation
+    hist_vol = volume.tail(22)
+    hist_close = close.tail(22)
+    price_diff = hist_close.diff()
+    directional_vol = np.where(price_diff >= 0, hist_vol, -hist_vol)
+    
+    net_vol = np.nan_to_num(directional_vol).sum()
+    avg_vol = hist_vol.mean()
+    flow_score = 50 if avg_vol == 0 else int(min(100, max(0, 50 + (net_vol / (avg_vol * 10)) * 50)))
+    rule_flow_passed = flow_score >= params["min_flow_score"]
+
+    # Composite Score Calculation
+    total_score = 0
+    if rule_ma_passed: total_score += params["weight_ma"]
+    if rule_perf_passed: total_score += params["weight_perf"]
+    if rule_flow_passed: total_score += params["weight_flow"]
+
     return {
+        "Score": total_score,
         "Close": latest_close,
-        "EMA20": latest_ema20,
-        "EMA50": latest_ema50,
-        "Gap_Pct": gap_pct,
-        "Status": status,
-        "Bullish_Setup": is_above or is_approaching
+        "Fast_EMA": latest_fast,
+        "Slow_EMA": latest_slow,
+        "MA_Gap": ma_gap_pct,
+        "Period_Return": period_return_pct,
+        "Flow_Score": flow_score,
+        "Pass_MA": rule_ma_passed,
+        "Pass_Perf": rule_perf_passed,
+        "Pass_Flow": rule_flow_passed
     }
 
 
-def fetch_institutional_flows_30d(df: pd.DataFrame):
-    """Calculates 30-day Volume-Weighted Accumulation score safely."""
-    if len(df) < 15 or "Volume" not in df.columns:
-        return {"Flow_Signal": "Neutral", "Net_30D_Score": 50}
+# ==============================================================================
+# SIDEBAR: RULE & PARAMETER CONFIGURATION
+# ==============================================================================
 
-    hist30 = df.tail(22).copy()
-    close_series = pd.Series(hist30["Close"].values.flatten())
-    vol_series = pd.Series(hist30["Volume"].values.flatten())
+st.sidebar.header("⚙️ Rule Configuration")
+st.sidebar.caption("Adjust thresholds to customize scoring logic.")
 
-    price_diff = close_series.diff()
-    directional_vol = np.where(price_diff >= 0, vol_series, -vol_series)
-    
-    net_flow_vol = np.nan_to_num(directional_vol).sum()
-    avg_vol = vol_series.mean()
-    
-    if avg_vol == 0 or np.isnan(avg_vol):
-        return {"Flow_Signal": "Neutral", "Net_30D_Score": 50}
+st.sidebar.subheader("1. Trend Rule (EMA)")
+ema_fast_val = st.sidebar.number_input("Fast EMA Span (Days)", value=20, step=5)
+ema_slow_val = st.sidebar.number_input("Slow EMA Span (Days)", value=50, step=5)
+weight_ma_val = st.sidebar.slider("Trend Rule Weight (pts)", 0, 50, 40)
 
-    flow_score = min(100, max(0, int(50 + (net_flow_vol / (avg_vol * 10)) * 50)))
-    
-    if flow_score >= 60:
-        signal = "🔥 Accumulation"
-    elif flow_score <= 40:
-        signal = "🚨 Distribution"
-    else:
-        signal = "➡️ Steady"
+st.sidebar.subheader("2. Performance Rule")
+perf_days_val = st.sidebar.number_input("Lookback Window (Days)", value=60, step=10)
+min_return_val = st.sidebar.number_input("Min Required Return (%)", value=2.0, step=0.5)
+weight_perf_val = st.sidebar.slider("Performance Rule Weight (pts)", 0, 50, 30)
 
-    return {
-        "Flow_Signal": signal,
-        "Net_30D_Score": flow_score
-    }
+st.sidebar.subheader("3. Money Flow Rule")
+min_flow_val = st.sidebar.slider("Min Money Flow Score", 0, 100, 50)
+weight_flow_val = st.sidebar.slider("Money Flow Rule Weight (pts)", 0, 50, 30)
 
+# Consolidated Rules Parameters Dictionary
+RULE_PARAMS = {
+    "ema_fast": ema_fast_val,
+    "ema_slow": ema_slow_val,
+    "weight_ma": weight_ma_val,
+    "perf_days": perf_days_val,
+    "min_return_pct": min_return_val,
+    "weight_perf": weight_perf_val,
+    "min_flow_score": min_flow_val,
+    "weight_flow": weight_flow_val
+}
 
-def score_etf(ticker: str):
-    """Calculates composite score (0-100) based on Technicals & Volume Money Flow."""
-    df = fetch_history_safely(ticker)
-    if df.empty:
-        return None
-
-    tech = analyze_etf_technical_ema(df)
-    if not tech:
-        return None
-
-    flows = fetch_institutional_flows_30d(df)
-
-    score = 0
-    if tech.get("Bullish_Setup"): score += 50
-    if flows.get("Net_30D_Score", 0) >= 50: score += 50
-
-    return {
-        "Ticker": ticker,
-        "Score": score,
-        "Tech": tech,
-        "Flows": flows
-    }
+MAX_POSSIBLE_SCORE = weight_ma_val + weight_perf_val + weight_flow_val
 
 
 # ==============================================================================
 # MAIN APPLICATION INTERFACE
 # ==============================================================================
 
-st.title("🎯 90-Day Tactical Market Screener")
-st.caption("Automated Market Scanner: US Sectors, Factors, and Ex-China International Candidates")
+st.title("🎯 Custom ETF Screener & Scoring Engine")
 
-# Macro Rates Header
-fed_data = fetch_fed_funds_probabilities()
-st.subheader("🏛️ Macro Monitor")
-f_col1, f_col2, f_col3, f_col4, f_col5 = st.columns(5)
-f_col1.metric("Next FOMC Meeting", fed_data["Next Meeting"])
-f_col2.metric("Pause Prob.", fed_data["Pause Probability"])
-f_col3.metric("Cut Prob.", fed_data["Cut Probability (-25bps)"])
-f_col4.metric("Hike Prob.", fed_data["Hike Probability"])
-f_col5.metric("10Yr Yield", fed_data["10Yr Benchmark Yield"], delta=fed_data["Regime Sentiment"])
-
-st.markdown("---")
-
-tab_discovery, tab_lookup = st.tabs([
-    "🚀 90-Day Market Candidates",
-    "🔍 Single ETF Deep-Dive"
+tab_screen, tab_single = st.tabs([
+    "📊 Batch Universe Screener",
+    "🔍 Single Symbol Scorecard"
 ])
 
 
 # ==============================================================================
-# TAB 1: AUTOMATED 90-DAY MARKET CANDIDATE DISCOVERY
+# TAB 1: BATCH UNIVERSE SCREENER
 # ==============================================================================
-with tab_discovery:
-    st.header("⚡ Top 90-Day Tactical Candidates Across Markets")
-    st.caption("Scans broad sector, factor, and regional ETFs for upcoming momentum setups.")
+with tab_screen:
+    st.header("Custom Universe Screening")
+    st.caption("Enter your list of ETFs to evaluate them against your active sidebar rules.")
 
-    # Controls
-    col_filter_reg, col_min_score, _ = st.columns([2, 2, 3])
-    with col_filter_reg:
-        selected_region = st.selectbox("Filter Region:", ["All Regions", "US", "Developed", "Emerging", "ex-China"])
-    with col_min_score:
-        min_score_cutoff = st.slider("Minimum 90D Score:", min_value=0, max_value=100, value=50, step=10)
+    default_tickers = "VFLO, SCHD, SCYB, JPST, JAAA, VEA, DIVI, EMXC, SMH, XLK, QQQ, SPY"
+    user_input = st.text_area(
+        "Enter ETF Tickers (comma or space separated):",
+        value=default_tickers,
+        height=100
+    )
 
-    discovered_candidates = []
+    tickers_list = [t.strip().upper() for t in user_input.replace("\n", ",").split(",") if t.strip()]
 
-    with st.spinner("Scanning market candidates..."):
-        for ticker, info in DYNAMIC_MARKET_POOL.items():
-            if selected_region != "All Regions" and info["region"] != selected_region:
-                continue
+    min_total_score = st.slider("Minimum Composite Score Filter:", 0, MAX_POSSIBLE_SCORE, int(MAX_POSSIBLE_SCORE * 0.5))
 
-            res = score_etf(ticker)
-            if res and res["Score"] >= min_score_cutoff:
-                discovered_candidates.append({
+    if st.button("Run Universe Screen", type="primary"):
+        results = []
+        progress_bar = st.progress(0)
+        
+        for idx, ticker in enumerate(tickers_list):
+            df = fetch_etf_history(ticker)
+            eval_res = evaluate_rules(df, RULE_PARAMS)
+            
+            if eval_res and eval_res["Score"] >= min_total_score:
+                results.append({
                     "Ticker": ticker,
-                    "Name": info["name"],
-                    "Region": info["region"],
-                    "90D Score": res["Score"],
-                    "EMA Trend Setup": res["Tech"]["Status"],
-                    "30D Inst Flow": res["Flows"]["Flow_Signal"],
-                    "Flow Score": f"{res['Flows']['Net_30D_Score']}/100"
+                    "Total Score": eval_res["Score"],
+                    "Price": f"${eval_res['Close']:.2f}",
+                    "Trend Rule": "✅ Pass" if eval_res["Pass_MA"] else "❌ Fail",
+                    "Return Rule": "✅ Pass" if eval_res["Pass_Perf"] else "❌ Fail",
+                    "Flow Rule": "✅ Pass" if eval_res["Pass_Flow"] else "❌ Fail",
+                    "Return (%)": f"{eval_res['Period_Return']:.2f}%",
+                    "Flow Score": f"{eval_res['Flow_Score']}/100"
                 })
+            
+            progress_bar.progress((idx + 1) / len(tickers_list))
 
-    if discovered_candidates:
-        cand_df = pd.DataFrame(discovered_candidates).sort_values(by="90D Score", ascending=False).reset_index(drop=True)
+        progress_bar.empty()
 
-        st.dataframe(
-            cand_df,
-            hide_index=True,
-            column_config={
-                "90D Score": st.column_config.ProgressColumn("90D Readiness Score", format="%d pts", min_value=0, max_value=100),
-                "Ticker": st.column_config.TextColumn("Ticker", width=80),
-            },
-            use_container_width=True
-        )
-    else:
-        st.warning("No market candidates met the minimum score criteria for the selected filters.")
+        if results:
+            res_df = pd.DataFrame(results).sort_values(by="Total Score", ascending=False).reset_index(drop=True)
+            st.dataframe(
+                res_df,
+                hide_index=True,
+                column_config={
+                    "Total Score": st.column_config.ProgressColumn(
+                        "Total Score",
+                        format="%d pts",
+                        min_value=0,
+                        max_value=MAX_POSSIBLE_SCORE
+                    )
+                },
+                use_container_width=True
+            )
+        else:
+            st.warning("No ETFs passed the minimum composite score threshold.")
 
 
 # ==============================================================================
-# TAB 2: SINGLE ETF SCORE LOOKUP
+# TAB 2: SINGLE SYMBOL SCORECARD
 # ==============================================================================
-with tab_lookup:
-    st.header("🔍 Single ETF Deep-Dive")
-    st.caption("Calculate 90-day technical and flow scores for any ticker symbol.")
+with tab_single:
+    st.header("Single ETF Rule Breakdown")
+    st.caption("Inspect exactly how an individual symbol scores against each rule.")
 
-    col_input, _ = st.columns([2, 3])
-    with col_input:
-        lookup_ticker = st.text_input("Enter Ticker Symbol:", value="EMXC", placeholder="e.g. EMXC, SCHD, VFLO").strip().upper()
+    lookup_ticker = st.text_input("Enter Ticker Symbol:", value="EMXC").strip().upper()
 
     if lookup_ticker:
-        with st.spinner(f"Evaluating {lookup_ticker}..."):
-            res = score_etf(lookup_ticker)
+        with st.spinner(f"Fetching and analyzing {lookup_ticker}..."):
+            df = fetch_etf_history(lookup_ticker)
+            res = evaluate_rules(df, RULE_PARAMS)
 
         if res:
-            st.markdown(f"### Score for **{lookup_ticker}**: `{res['Score']}/100` Points")
-            
-            sc1, sc2 = st.columns(2)
-            with sc1:
-                st.metric("Technical Setup (20/50 EMA)", res["Tech"]["Status"], delta=f"Gap: {res['Tech']['Gap_Pct']:.2f}%")
-                st.write(f"- **Close:** ${res['Tech']['Close']:.2f}")
-                st.write(f"- **20 EMA:** ${res['Tech']['EMA20']:.2f}")
-                st.write(f"- **50 EMA:** ${res['Tech']['EMA50']:.2f}")
+            st.markdown(f"### Score for **{lookup_ticker}**: `{res['Score']} / {MAX_POSSIBLE_SCORE}` Points")
 
-            with sc2:
-                st.metric("30D Institutional Flow", res["Flows"]["Flow_Signal"], delta=f"Score: {res['Flows']['Net_30D_Score']}/100")
-                st.write("Calculated via 30-day Volume-Weighted Money Flow.")
-        else:
-            st.error(f"Could not retrieve ticker data for '{lookup_ticker}'. Please verify the symbol.")
+            c1, c2, c3 = st.columns(3)
             
+            with c1:
+                st.subheader("1. Trend Rule")
+                status_ma = "✅ PASS" if res["Pass_MA"] else "❌ FAIL"
+                st.metric("Trend Status", status_ma, delta=f"Points: {RULE_PARAMS['weight_ma'] if res['Pass_MA'] else 0}")
+                st.write(f"- **Fast EMA ({RULE_PARAMS['ema_fast']}D):** ${res['Fast_EMA']:.2f}")
+                st.write(f"- **Slow EMA ({RULE_PARAMS['ema_slow']}D):** ${res['Slow_EMA']:.2f}")
+                st.write(f"- **Spread:** {res['MA_Gap']:.2f}%")
+
+            with c2:
+                st.subheader("2. Performance Rule")
+                status_perf = "✅ PASS" if res["Pass_Perf"] else "❌ FAIL"
+                st.metric("Performance Status", status_perf, delta=f"Points: {RULE_PARAMS['weight_perf'] if res['Pass_Perf'] else 0}")
+                st.write(f"- **Lookback Window:** {RULE_PARAMS['perf_days']} Days")
+                st.write(f"- **Actual Return:** {res['Period_Return']:.2f}%")
+                st.write(f"- **Target Return:** ≥ {RULE_PARAMS['min_return_pct']:.2f}%")
+
+            with c3:
+                st.subheader("3. Money Flow Rule")
+                status_flow = "✅ PASS" if res["Pass_Flow"] else "❌ FAIL"
+                st.metric("Flow Status", status_flow, delta=f"Points: {RULE_PARAMS['weight_flow'] if res['Pass_Flow'] else 0}")
+                st.write(f"- **Flow Score:** {res['Flow_Score']} / 100")
+                st.write(f"- **Target Score:** ≥ {RULE_PARAMS['min_flow_score']}")
+        else:
+            st.error(f"Could not retrieve historical data for '{lookup_ticker}'. Please verify the symbol.")
