@@ -2,7 +2,8 @@
 app.py
 ======
 90-Day Tactical ETF Screener & Deep Dive Analysis Tool.
-Fixed MultiIndex column flattening and resilient yfinance parsing.
+Fixed: Cloud server rate-limit bypass (requests session + custom User-Agent)
+       and MultiIndex column flattening.
 """
 
 import os
@@ -17,6 +18,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import yfinance as yf
+import requests
 
 # Page configuration
 st.set_page_config(
@@ -75,34 +77,44 @@ DYNAMIC_MARKET_POOL = {
 # ROBUST DATA FETCHING & ANALYTICS
 # ==============================================================================
 
+# Custom HTTP Session to mimic browser request & prevent Yahoo IP blocking
+yf_session = requests.Session()
+yf_session.headers.update({
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+})
+
+
 def fetch_history_safely(ticker: str, period: str = "6m") -> pd.DataFrame:
-    """Fetches price history and guarantees a clean, single-level column DataFrame."""
+    """Fetches price history using browser headers to avoid Cloud IP rate-limiting."""
+    df = pd.DataFrame()
+    
+    # Method 1: yf.download with custom session
     try:
-        # Download raw data
-        df = yf.download(ticker, period=period, progress=False, auto_adjust=True)
-        
-        if df.empty:
-            # Fallback to Ticker object
-            tk = yf.Ticker(ticker)
+        df = yf.download(ticker, period=period, progress=False, auto_adjust=True, session=yf_session)
+    except Exception:
+        pass
+
+    # Method 2: yf.Ticker object fallback
+    if df.empty:
+        try:
+            tk = yf.Ticker(ticker, session=yf_session)
             df = tk.history(period=period)
-            
-        if df.empty:
-            return pd.DataFrame()
+        except Exception:
+            pass
 
-        # Handle MultiIndex columns explicitly (flatten them out)
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = [col[0] for col in df.columns]
+    if df.empty:
+        return pd.DataFrame()
 
-        # Standardize column naming
-        df = df.loc[:, ~df.columns.duplicated()]  # Remove duplicated columns if any
-        
-        if "Close" in df.columns:
-            # Drop NaN or empty rows
-            df = df.dropna(subset=["Close"])
-            return df
-    except Exception as e:
-        st.error(f"Debug Error fetching {ticker}: {str(e)}")
-        
+    # Flatten MultiIndex headers if returned by yfinance
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = [col[0] for col in df.columns]
+
+    df = df.loc[:, ~df.columns.duplicated()]
+
+    if "Close" in df.columns:
+        df = df.dropna(subset=["Close"])
+        return df
+
     return pd.DataFrame()
 
 
@@ -112,7 +124,8 @@ def fetch_fed_funds_probabilities():
     df = fetch_history_safely("^TNX", period="5d")
     last_yield = 4.25
     if not df.empty and "Close" in df.columns:
-        last_yield = float(df["Close"].iloc[-1])
+        close_vals = df["Close"].values.flatten()
+        last_yield = float(close_vals[-1])
 
     return {
         "Next Meeting": "Sep 16, 2026",
@@ -125,11 +138,10 @@ def fetch_fed_funds_probabilities():
 
 
 def analyze_etf_technical_ema(df: pd.DataFrame):
-    """Calculates 20/50 day EMAs safely with flattened series."""
-    if len(df) < 30:  # Allow 30+ days minimum to catch fast setups
+    """Calculates 20/50 day EMAs safely with flattened 1D arrays."""
+    if len(df) < 30:
         return None
 
-    # Force 1D pandas Series
     close_series = pd.Series(df["Close"].values.flatten(), index=df.index)
     
     ema20 = close_series.ewm(span=20, adjust=False).mean()
