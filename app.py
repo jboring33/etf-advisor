@@ -2,7 +2,8 @@
 app.py
 ======
 90-Day Tactical ETF Screener & Institutional Flow Engine.
-Includes US and Ex-China International / Emerging Market Candidates.
+Includes US and Ex-China International / Emerging Market Candidates
+with resilient error handling for yfinance data retrieval.
 """
 
 import os
@@ -146,62 +147,58 @@ def analyze_etf_technical_ema(ticker: str):
 
 @st.cache_data(ttl=7200)
 def fetch_top_holdings_earnings(ticker: str):
-    """Fetches top holdings and evaluates earnings dates / surprises for the next 30 days."""
+    """Fetches top holdings safely with fallback handling if Yahoo Finance fund data is missing."""
+    holdings = [ticker]
+    
     try:
         tk = yf.Ticker(ticker)
-        holdings = []
-        try:
-            cfg = tk.funds_data.top_holdings
+        if hasattr(tk, "funds_data") and tk.funds_data is not None:
+            cfg = getattr(tk.funds_data, "top_holdings", None)
             if cfg is not None and not cfg.empty:
                 holdings = cfg.index.tolist()[:7]
-        except Exception:
-            pass
-
-        if not holdings:
-            holdings = [ticker]
-
-        earnings_summary = []
-        upcoming_count = 0
-        positive_surprises = 0
-
-        for symbol in holdings:
-            try:
-                sub_tk = yf.Ticker(symbol)
-                cal = sub_tk.calendar
-                
-                next_date = "N/A"
-                if isinstance(cal, dict) and "Earnings Date" in cal:
-                    ed = cal["Earnings Date"]
-                    if ed:
-                        next_date = ed[0].strftime("%Y-%m-%d") if isinstance(ed[0], datetime.date) else str(ed[0])
-                        upcoming_count += 1
-                
-                surp_df = sub_tk.earnings_dates
-                last_surprise = "N/A"
-                if surp_df is not None and "Surprise(%)" in surp_df.columns:
-                    recent = surp_df.dropna(subset=["Surprise(%)"])
-                    if not recent.empty:
-                        val = recent["Surprise(%)"].iloc[0] * 100
-                        last_surprise = f"{val:+.1f}%"
-                        if val > 0:
-                            positive_surprises += 1
-
-                earnings_summary.append({
-                    "Holding": symbol,
-                    "Next Earnings": next_date,
-                    "Last Surprise": last_surprise
-                })
-            except Exception:
-                continue
-
-        return {
-            "Holdings_Count": len(holdings),
-            "Upcoming_30D_Earnings": upcoming_count,
-            "Positive_Surprise_Ratio": f"{positive_surprises}/{len(holdings)}" if holdings else "0/0",
-            "Details": earnings_summary
-        }
     except Exception:
-        return {"Holdings_Count": 0, "Upcoming_30D_Earnings": 0, "Positive_Surprise_Ratio": "N/A", "Details": []}
+        pass
+
+    earnings_summary = []
+    upcoming_count = 0
+    positive_surprises = 0
+
+    for symbol in holdings:
+        try:
+            sub_tk = yf.Ticker(symbol)
+            cal = sub_tk.calendar
+            
+            next_date = "N/A"
+            if isinstance(cal, dict) and "Earnings Date" in cal:
+                ed = cal["Earnings Date"]
+                if ed:
+                    next_date = ed[0].strftime("%Y-%m-%d") if isinstance(ed[0], datetime.date) else str(ed[0])
+                    upcoming_count += 1
+            
+            surp_df = sub_tk.earnings_dates
+            last_surprise = "N/A"
+            if surp_df is not None and "Surprise(%)" in surp_df.columns:
+                recent = surp_df.dropna(subset=["Surprise(%)"])
+                if not recent.empty:
+                    val = recent["Surprise(%)"].iloc[0] * 100
+                    last_surprise = f"{val:+.1f}%"
+                    if val > 0:
+                        positive_surprises += 1
+
+            earnings_summary.append({
+                "Holding": symbol,
+                "Next Earnings": next_date,
+                "Last Surprise": last_surprise
+            })
+        except Exception:
+            continue
+
+    return {
+        "Holdings_Count": len(holdings),
+        "Upcoming_30D_Earnings": upcoming_count,
+        "Positive_Surprise_Ratio": f"{positive_surprises}/{len(holdings)}" if holdings else "0/0",
+        "Details": earnings_summary
+    }
 
 @st.cache_data(ttl=3600)
 def fetch_institutional_flows_30d(ticker: str):
@@ -235,18 +232,18 @@ def fetch_institutional_flows_30d(ticker: str):
         return {"Flow_Signal": "Neutral", "Net_30D_Score": 50}
 
 def score_etf(ticker: str):
-    """Calculates composite 90-day readiness score for an ETF."""
+    """Calculates composite 90-day readiness score for an ETF with strict null handling."""
     tech = analyze_etf_technical_ema(ticker)
-    flows = fetch_institutional_flows_30d(ticker)
-    earnings = fetch_top_holdings_earnings(ticker)
-
     if not tech:
         return None
 
+    flows = fetch_institutional_flows_30d(ticker) or {"Flow_Signal": "Neutral", "Net_30D_Score": 50}
+    earnings = fetch_top_holdings_earnings(ticker) or {"Holdings_Count": 0, "Upcoming_30D_Earnings": 0, "Positive_Surprise_Ratio": "N/A", "Details": []}
+
     score = 0
-    if tech["Bullish_Setup"]: score += 40
-    if flows["Net_30D_Score"] >= 60: score += 30
-    if earnings["Upcoming_30D_Earnings"] > 0: score += 30
+    if tech.get("Bullish_Setup"): score += 40
+    if flows.get("Net_30D_Score", 0) >= 60: score += 30
+    if earnings.get("Upcoming_30D_Earnings", 0) > 0: score += 30
 
     return {
         "Ticker": ticker,
@@ -396,7 +393,7 @@ with tab_screen:
 
     st.markdown("---")
 
-    # EXPANDED CANDIDATE RECOMMENDER SECTION (US & EX-CHINA INTERNATIONAL)
+    # EXPANDED CANDIDATE RECOMMENDER SECTION
     st.subheader("💡 Market Candidate Recommendations (US & Ex-China International)")
     st.caption("Scans broad international, emerging ex-China, and US factor/sector ETFs.")
 
