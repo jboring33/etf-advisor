@@ -3,8 +3,9 @@ app.py
 ======
 Modular ETF Rule Configurator & Scoring Engine (10 Rules)
 Features:
-- Streamlined Points Configurator matching the exact 3-column format:
+- Streamlined Points Configurator matching the 3-column format:
   [Rule #, Rule Name, My Weight]
+- Session state cache reset to fix KeyError on schema change.
 - Real-time 100-point total tracking and validation.
 """
 
@@ -40,9 +41,9 @@ st.markdown("""
 if "user_tickers" not in st.session_state:
     st.session_state["user_tickers"] = "VFLO, SCHD, SCYB, JPST, JAAA, VEA, DIVI, EMXC, SMH, XLK, QQQ, SPY"
 
-# Initialize weight table to match the layout
-if "config_df" not in st.session_state:
-    st.session_state["config_df"] = pd.DataFrame([
+# Initialize weight table with updated key to overwrite stale session state
+if "config_df_v2" not in st.session_state:
+    st.session_state["config_df_v2"] = pd.DataFrame([
         {"Rule #": "Rule 1", "Rule Name": "Moving Average Trend", "My Weight": 12},
         {"Rule #": "Rule 2", "Rule Name": "Absolute Return", "My Weight": 8},
         {"Rule #": "Rule 3", "Rule Name": "Institutional Money Flow", "My Weight": 11},
@@ -267,9 +268,8 @@ tab_config, tab_screen, tab_single = st.tabs([
 with tab_config:
     st.subheader("Rule Weight Allocation")
     
-    # Interactive Table matching user's exact 3-column requested layout
     edited_df = st.data_editor(
-        st.session_state["config_df"],
+        st.session_state["config_df_v2"],
         hide_index=True,
         use_container_width=False,
         width=500,
@@ -278,15 +278,14 @@ with tab_config:
             "Rule Name": st.column_config.TextColumn("Rule Name", disabled=True),
             "My Weight": st.column_config.NumberColumn("My Weight", min_value=0, max_value=100, step=1, format="%d")
         },
-        key="rule_weights_editor"
+        key="rule_weights_editor_v2"
     )
 
-    st.session_state["config_df"] = edited_df
+    st.session_state["config_df_v2"] = edited_df
 
     total_raw_points = int(edited_df["My Weight"].sum())
     is_points_valid = (total_raw_points == 100)
 
-    # Clean bottom total display
     st.markdown(f"### **Total:** `{total_raw_points}`")
 
     if is_points_valid:
