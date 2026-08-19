@@ -3,9 +3,9 @@ app.py
 ======
 Modular ETF Rule Configurator & Scoring Engine (10 Rules)
 Features:
-- Direct raw slider point allocation per rule (No point normalization).
-- Real-time total point validation enforcing an exact total of 100 points.
-- Batch Universe Screener & Single Symbol Scorecard fully in sync across all 10 rules.
+- Main-tab Point Configurator alongside Screener and Scorecard.
+- Direct raw slider point allocation per rule (No auto-normalization).
+- Real-time 100-point total validation enabling adjustments regardless of error state.
 """
 
 import streamlit as st
@@ -100,7 +100,7 @@ def calculate_atr_ratio(df: pd.DataFrame, period: int = 14) -> float:
 
 
 # ==============================================================================
-# SCORING & RULE EVALUATION ENGINE (RAW POINTS)
+# SCORING & RULE EVALUATION ENGINE
 # ==============================================================================
 
 def evaluate_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
@@ -189,7 +189,7 @@ def evaluate_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
     atr_pct = calculate_atr_ratio(df, period=14)
     rule_atr_passed = atr_pct <= params["max_atr_pct"]
 
-    # Score Calculation (Direct Raw Sum)
+    # Direct Raw Sum Scoring
     total_score = 0
     if rule_ma_passed: total_score += params["weight_ma"]
     if rule_perf_passed: total_score += params["weight_perf"]
@@ -231,66 +231,79 @@ def evaluate_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
 
 
 # ==============================================================================
-# SIDEBAR: DIRECT RAW POINTS ALLOCATION & 100-POINT TOTAL CHECK
+# MAIN APPLICATION & TABS
 # ==============================================================================
 
-st.sidebar.header("⚙️ Rule & Raw Points Configurator")
-st.sidebar.caption("Set the raw points for each rule below. **Total points must equal exactly 100.**")
+st.title("🎯 Custom ETF Screener & Scoring Engine")
 
-st.sidebar.subheader("1. Trend Rule (EMA)")
-ema_fast_val = st.sidebar.number_input("Fast EMA Span (Days)", value=20, step=5)
-ema_slow_val = st.sidebar.number_input("Slow EMA Span (Days)", value=50, step=5)
-raw_ma = st.sidebar.slider("Points: Rule 1", 0, 100, 15, key="p_ma")
+benchmark_df = fetch_etf_history("SPY")
 
-st.sidebar.subheader("2. Absolute Return")
-perf_days_val = st.sidebar.number_input("Lookback Window (Days)", value=60, step=10)
-min_return_val = st.sidebar.number_input("Min Required Return (%)", value=2.0, step=0.5)
-raw_perf = st.sidebar.slider("Points: Rule 2", 0, 100, 10, key="p_perf")
+# Navigation Tabs with Points Configurator integrated into main view
+tab_config, tab_screen, tab_single = st.tabs([
+    "⚙️ Points Configurator",
+    "📊 Batch Universe Screener",
+    "🔍 Single Symbol Scorecard"
+])
 
-st.sidebar.subheader("3. Money Flow Rule")
-min_flow_val = st.sidebar.slider("Min Money Flow Score", 0, 100, 50)
-raw_flow = st.sidebar.slider("Points: Rule 3", 0, 100, 10, key="p_flow")
 
-st.sidebar.subheader("4. Relative Strength vs SPY")
-min_alpha_val = st.sidebar.number_input("Min Excess Alpha vs SPY (%)", value=1.0, step=0.5)
-raw_rs = st.sidebar.slider("Points: Rule 4", 0, 100, 15, key="p_rs")
+# ==============================================================================
+# TAB 1: POINTS CONFIGURATOR
+# ==============================================================================
+with tab_config:
+    st.header("Rules & Points Allocation")
+    st.caption("Adjust points assigned to each technical rule. The grand total across all 10 rules must equal exactly **100 points**.")
 
-st.sidebar.subheader("5. Volume Expansion")
-min_vol_ratio_val = st.sidebar.number_input("Min Volume Ratio (5D/50D)", value=1.1, step=0.1)
-raw_vol_exp = st.sidebar.slider("Points: Rule 5", 0, 100, 10, key="p_vol")
+    col1, col2 = st.columns(2)
 
-st.sidebar.subheader("6. Trailing Max Drawdown Filter")
-max_dd_val = st.sidebar.number_input("Max Allowed Drawdown (%)", value=10.0, step=1.0)
-raw_dd = st.sidebar.slider("Points: Rule 6", 0, 100, 10, key="p_dd")
+    with col1:
+        st.subheader("1. Trend Rule (EMA)")
+        ema_fast_val = st.number_input("Fast EMA Span (Days)", value=20, step=5)
+        ema_slow_val = st.number_input("Slow EMA Span (Days)", value=50, step=5)
+        raw_ma = st.slider("Points: Rule 1", 0, 100, 15, key="p_ma")
 
-st.sidebar.subheader("7. Proximity to 52-Week High")
-max_dist_52w_val = st.sidebar.number_input("Max % Distance from High", value=8.0, step=1.0)
-raw_52w = st.sidebar.slider("Points: Rule 7", 0, 100, 10, key="p_52w")
+        st.subheader("2. Absolute Return")
+        perf_days_val = st.number_input("Lookback Window (Days)", value=60, step=10)
+        min_return_val = st.number_input("Min Required Return (%)", value=2.0, step=0.5)
+        raw_perf = st.slider("Points: Rule 2", 0, 100, 10, key="p_perf")
 
-st.sidebar.subheader("8. RSI Range Filter")
-min_rsi_val = st.sidebar.number_input("Min RSI (Not Oversold)", value=45.0, step=5.0)
-max_rsi_val = st.sidebar.number_input("Max RSI (Not Overbought)", value=70.0, step=5.0)
-raw_rsi = st.sidebar.slider("Points: Rule 8", 0, 100, 10, key="p_rsi")
+        st.subheader("3. Money Flow Rule")
+        min_flow_val = st.slider("Min Money Flow Score", 0, 100, 50)
+        raw_flow = st.slider("Points: Rule 3", 0, 100, 10, key="p_flow")
 
-st.sidebar.subheader("9. Risk-Adjusted Sharpe Ratio")
-min_sharpe_val = st.sidebar.number_input("Min Sharpe Ratio", value=0.5, step=0.1)
-raw_sharpe = st.sidebar.slider("Points: Rule 9", 0, 100, 10, key="p_sharpe")
+        st.subheader("4. Relative Strength vs SPY")
+        min_alpha_val = st.number_input("Min Excess Alpha vs SPY (%)", value=1.0, step=0.5)
+        raw_rs = st.slider("Points: Rule 4", 0, 100, 15, key="p_rs")
 
-st.sidebar.subheader("10. Volatility Squeeze (ATR %)")
-max_atr_val = st.sidebar.number_input("Max Allowed ATR % of Price", value=2.5, step=0.5)
-raw_atr = st.sidebar.slider("Points: Rule 10", 0, 100, 10, key="p_atr")
+        st.subheader("5. Volume Expansion")
+        min_vol_ratio_val = st.number_input("Min Volume Ratio (5D/50D)", value=1.1, step=0.1)
+        raw_vol_exp = st.slider("Points: Rule 5", 0, 100, 10, key="p_vol")
 
-# Total raw points sum validation
+    with col2:
+        st.subheader("6. Trailing Max Drawdown Filter")
+        max_dd_val = st.number_input("Max Allowed Drawdown (%)", value=10.0, step=1.0)
+        raw_dd = st.slider("Points: Rule 6", 0, 100, 10, key="p_dd")
+
+        st.subheader("7. Proximity to 52-Week High")
+        max_dist_52w_val = st.number_input("Max % Distance from High", value=8.0, step=1.0)
+        raw_52w = st.slider("Points: Rule 7", 0, 100, 10, key="p_52w")
+
+        st.subheader("8. RSI Range Filter")
+        min_rsi_val = st.number_input("Min RSI (Not Oversold)", value=45.0, step=5.0)
+        max_rsi_val = st.number_input("Max RSI (Not Overbought)", value=70.0, step=5.0)
+        raw_rsi = st.slider("Points: Rule 8", 0, 100, 10, key="p_rsi")
+
+        st.subheader("9. Risk-Adjusted Sharpe Ratio")
+        min_sharpe_val = st.number_input("Min Sharpe Ratio", value=0.5, step=0.1)
+        raw_sharpe = st.slider("Points: Rule 9", 0, 100, 10, key="p_sharpe")
+
+        st.subheader("10. Volatility Squeeze (ATR %)")
+        max_atr_val = st.number_input("Max Allowed ATR % of Price", value=2.5, step=0.5)
+        raw_atr = st.slider("Points: Rule 10", 0, 100, 10, key="p_atr")
+
+
+# Calculate real-time totals and state validation
 total_raw_points = sum([raw_ma, raw_perf, raw_flow, raw_rs, raw_vol_exp, raw_dd, raw_52w, raw_rsi, raw_sharpe, raw_atr])
 is_points_valid = (total_raw_points == 100)
-
-st.sidebar.markdown("---")
-if is_points_valid:
-    st.sidebar.success(f" Total Points: **{total_raw_points} / 100** (Valid)")
-else:
-    diff = 100 - total_raw_points
-    action_str = f"Add {diff} pts" if diff > 0 else f"Subtract {abs(diff)} pts"
-    st.sidebar.error(f" Total Points: **{total_raw_points} / 100** ({action_str})")
 
 RULE_PARAMS = {
     "ema_fast": ema_fast_val,
@@ -319,33 +332,27 @@ RULE_PARAMS = {
 }
 
 
-# ==============================================================================
-# MAIN APPLICATION INTERFACE
-# ==============================================================================
-
-st.title("🎯 Custom ETF Screener & Scoring Engine")
-
-# Pre-fetch Benchmark (SPY) Data
-benchmark_df = fetch_etf_history("SPY")
-
-if not is_points_valid:
-    st.error(
-        f"⚠️ **Total allocated points currently equal {total_raw_points} pts.** "
-        f"Please adjust your sidebar sliders so that all 10 rules add up to **exactly 100 points**."
-    )
-
-tab_screen, tab_single = st.tabs([
-    "📊 Batch Universe Screener",
-    "🔍 Single Symbol Scorecard"
-])
+# Sidebar Status Display
+st.sidebar.title("📊 System Status")
+if is_points_valid:
+    st.sidebar.success(f"**Total Points: {total_raw_points} / 100**\n\nRule set is balanced and valid.")
+else:
+    diff = 100 - total_raw_points
+    action_str = f"Add {diff} pts" if diff > 0 else f"Subtract {abs(diff)} pts"
+    st.sidebar.error(f"**Total Points: {total_raw_points} / 100**\n\nAction required: **{action_str}** in the Points Configurator tab.")
 
 
 # ==============================================================================
-# TAB 1: BATCH UNIVERSE SCREENER
+# TAB 2: BATCH UNIVERSE SCREENER
 # ==============================================================================
 with tab_screen:
     st.header("Custom Universe Screening")
-    st.caption("Screen tickers scored against all 10 rules on a direct 100-point total.")
+
+    if not is_points_valid:
+        st.error(
+            f"⚠️ **Point allocation total is currently {total_raw_points} pts.** "
+            f"Switch to the **⚙️ Points Configurator** tab to balance points to **100 total points**."
+        )
 
     user_input = st.text_area(
         "Enter ETF Tickers (comma or space separated):",
@@ -411,17 +418,16 @@ with tab_screen:
 
 
 # ==============================================================================
-# TAB 2: SINGLE SYMBOL SCORECARD
+# TAB 3: SINGLE SYMBOL SCORECARD
 # ==============================================================================
 with tab_single:
     st.header("Single ETF Rule Breakdown")
-    st.caption("Detailed breakdown of direct raw assigned points per rule out of 100 points.")
 
     lookup_ticker = st.text_input("Enter Ticker Symbol:", value="", placeholder="e.g. EMXC, VFLO, SCHD").strip().upper()
 
     if lookup_ticker:
         if not is_points_valid:
-            st.warning("⚠️ Adjust sidebar point sliders to equal exactly 100 points to view scorecard.")
+            st.warning("⚠️ Points allocation total must equal exactly 100 points. Please adjust rules in the Configurator tab.")
         else:
             with st.spinner(f"Fetching and analyzing {lookup_ticker}..."):
                 df = fetch_etf_history(lookup_ticker)
