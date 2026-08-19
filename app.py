@@ -3,16 +3,20 @@ app.py
 ======
 Modular ETF Rule Configurator & Scoring Engine (10 Rules)
 Features:
-- Streamlined Points Configurator matching the 3-column format:
-  [Rule #, Rule Name, My Weight]
-- Session state cache reset to fix KeyError on schema change.
-- Real-time 100-point total tracking and validation.
+- Streamlined 3-column Points Configurator [Rule #, Rule Name, My Weight].
+- Automated Weekly Snapshot saving & historical comparison engine.
+- Delta tracking (+/- pts) in Batch Universe Screener & Single Symbol Scorecard.
+- Dedicated Historical Tracker tab for week-over-week trend analysis.
 """
 
+import os
+from datetime import datetime
 import streamlit as st
 import pandas as pd
 import numpy as np
 import yfinance as yf
+
+SNAPSHOT_FILE = "weekly_runs.csv"
 
 # Page setup
 st.set_page_config(
@@ -35,13 +39,12 @@ st.markdown("""
 
 
 # ==============================================================================
-# SESSION STATE INITIALIZATION
+# SESSION STATE & HISTORICAL STORAGE ENGINE
 # ==============================================================================
 
 if "user_tickers" not in st.session_state:
     st.session_state["user_tickers"] = "VFLO, SCHD, SCYB, JPST, JAAA, VEA, DIVI, EMXC, SMH, XLK, QQQ, SPY"
 
-# Initialize weight table with updated key to overwrite stale session state
 if "config_df_v2" not in st.session_state:
     st.session_state["config_df_v2"] = pd.DataFrame([
         {"Rule #": "Rule 1", "Rule Name": "Moving Average Trend", "My Weight": 12},
@@ -55,6 +58,43 @@ if "config_df_v2" not in st.session_state:
         {"Rule #": "Rule 9", "Rule Name": "Sharpe Ratio Filter", "My Weight": 15},
         {"Rule #": "Rule 10", "Rule Name": "ATR Volatility Squeeze", "My Weight": 5},
     ])
+
+def save_run_snapshot(results: list):
+    """Saves or updates today's run snapshot in local storage."""
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    records = []
+    for r in results:
+        records.append({
+            "Run_Date": today_str,
+            "Ticker": r["Ticker"],
+            "Total_Score": r["Total Score"],
+            "Price": r["Price_Raw"]
+        })
+    
+    new_df = pd.DataFrame(records)
+    if os.path.exists(SNAPSHOT_FILE):
+        existing_df = pd.read_csv(SNAPSHOT_FILE)
+        # Replace existing entry for today if run multiple times on same date
+        existing_df = existing_df[existing_df["Run_Date"] != today_str]
+        combined_df = pd.concat([existing_df, new_df], ignore_index=True)
+        combined_df.to_csv(SNAPSHOT_FILE, index=False)
+    else:
+        new_df.to_csv(SNAPSHOT_FILE, index=False)
+
+def get_previous_run_data() -> pd.DataFrame:
+    """Retrieves the most recent prior run before today."""
+    if not os.path.exists(SNAPSHOT_FILE):
+        return pd.DataFrame()
+    
+    df = pd.read_csv(SNAPSHOT_FILE)
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    prior_df = df[df["Run_Date"] != today_str]
+    
+    if prior_df.empty:
+        return pd.DataFrame()
+    
+    latest_prior_date = prior_df["Run_Date"].max()
+    return prior_df[prior_df["Run_Date"] == latest_prior_date].set_index("Ticker")
 
 
 # ==============================================================================
@@ -86,11 +126,10 @@ def fetch_etf_history(ticker: str) -> pd.DataFrame:
 
 
 # ==============================================================================
-# TECHNICAL HELPER FUNCTIONS
+# TECHNICAL HELPER FUNCTIONS & RULE ENGINE
 # ==============================================================================
 
 def calculate_rsi(series: pd.Series, period: int = 14) -> float:
-    """Calculates Relative Strength Index (RSI)."""
     delta = series.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
@@ -99,13 +138,11 @@ def calculate_rsi(series: pd.Series, period: int = 14) -> float:
     return float(rsi.iloc[-1]) if not rsi.empty and not pd.isna(rsi.iloc[-1]) else 50.0
 
 def calculate_atr_ratio(df: pd.DataFrame, period: int = 14) -> float:
-    """Calculates 14-day ATR relative to Current Price."""
     if len(df) < period + 1 or "High" not in df.columns or "Low" not in df.columns:
         return 0.0
     high = pd.Series(df["High"].values.flatten())
     low = pd.Series(df["Low"].values.flatten())
     close = pd.Series(df["Close"].values.flatten())
-    
     tr1 = high - low
     tr2 = abs(high - close.shift())
     tr3 = abs(low - close.shift())
@@ -114,35 +151,26 @@ def calculate_atr_ratio(df: pd.DataFrame, period: int = 14) -> float:
     latest_close = close.iloc[-1]
     return float((atr / latest_close) * 100) if latest_close > 0 else 0.0
 
-
-# ==============================================================================
-# SCORING & RULE EVALUATION ENGINE
-# ==============================================================================
-
 def evaluate_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
-    """Evaluates 10 technical rules using raw weight assignments."""
     if df.empty or len(df) < params["ema_slow"]:
         return None
 
     close = pd.Series(df["Close"].values.flatten())
     volume = pd.Series(df["Volume"].values.flatten()) if "Volume" in df.columns else pd.Series(np.zeros(len(df)))
 
-    # 1. Moving Average Trend
+    # 1. Trend
     ema_fast = close.ewm(span=params["ema_fast"], adjust=False).mean()
     ema_slow = close.ewm(span=params["ema_slow"], adjust=False).mean()
     latest_close = float(close.iloc[-1])
-    latest_fast = float(ema_fast.iloc[-1])
-    latest_slow = float(ema_slow.iloc[-1])
-    ma_gap_pct = ((latest_fast - latest_slow) / latest_slow) * 100
-    rule_ma_passed = latest_fast > latest_slow
+    rule_ma_passed = float(ema_fast.iloc[-1]) > float(ema_slow.iloc[-1])
 
-    # 2. Absolute Return
+    # 2. Performance
     lookback_days = min(params["perf_days"], len(close) - 1)
     past_close = float(close.iloc[-lookback_days])
     period_return_pct = ((latest_close - past_close) / past_close) * 100
     rule_perf_passed = period_return_pct >= params["min_return_pct"]
 
-    # 3. Institutional Money Flow
+    # 3. Flow
     hist_vol = volume.tail(22)
     hist_close = close.tail(22)
     price_diff = hist_close.diff()
@@ -152,7 +180,7 @@ def evaluate_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
     flow_score = 50 if avg_vol == 0 else int(min(100, max(0, 50 + (net_vol / (avg_vol * 10)) * 50)))
     rule_flow_passed = flow_score >= params["min_flow_score"]
 
-    # 4. Relative Strength vs SPY Benchmark
+    # 4. Relative Strength
     alpha_pct = 0.0
     rule_rs_passed = False
     if not benchmark_df.empty and len(benchmark_df) >= lookback_days:
@@ -163,7 +191,7 @@ def evaluate_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
         alpha_pct = period_return_pct - bench_return
         rule_rs_passed = alpha_pct >= params["min_alpha_pct"]
 
-    # 5. Volume Expansion
+    # 5. Vol Exp
     vol_ratio = 1.0
     rule_vol_exp_passed = False
     if len(volume) >= 50:
@@ -172,7 +200,7 @@ def evaluate_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
         vol_ratio = (vol_5d / vol_50d) if vol_50d > 0 else 1.0
         rule_vol_exp_passed = vol_ratio >= params["min_vol_ratio"]
 
-    # 6. Max Trailing Drawdown
+    # 6. Drawdown
     max_dd_pct = 0.0
     rule_dd_passed = False
     if len(close) >= 60:
@@ -182,7 +210,7 @@ def evaluate_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
         max_dd_pct = abs(float(drawdown.min())) * 100
         rule_dd_passed = max_dd_pct <= params["max_drawdown_pct"]
 
-    # 7. Proximity to 52-Week High
+    # 7. 52W High
     dist_52w_high_pct = 0.0
     rule_52w_passed = False
     if len(close) >= 120:
@@ -190,22 +218,22 @@ def evaluate_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
         dist_52w_high_pct = ((high_52w - latest_close) / high_52w) * 100
         rule_52w_passed = dist_52w_high_pct <= params["max_dist_52w_pct"]
 
-    # 8. RSI Band Filter
+    # 8. RSI
     rsi_val = calculate_rsi(close, period=14)
     rule_rsi_passed = (rsi_val >= params["min_rsi"]) and (rsi_val <= params["max_rsi"])
 
-    # 9. Sharpe Ratio
+    # 9. Sharpe
     daily_returns = close.pct_change().dropna()
     ann_return = daily_returns.mean() * 252
     ann_std = daily_returns.std() * np.sqrt(252)
     sharpe_ratio = (ann_return / ann_std) if ann_std > 0 else 0.0
     rule_sharpe_passed = sharpe_ratio >= params["min_sharpe"]
 
-    # 10. ATR Squeeze
+    # 10. ATR
     atr_pct = calculate_atr_ratio(df, period=14)
     rule_atr_passed = atr_pct <= params["max_atr_pct"]
 
-    # Direct Weight Sum Scoring
+    # Calculate Total
     total_score = 0
     if rule_ma_passed: total_score += params["weight_ma"]
     if rule_perf_passed: total_score += params["weight_perf"]
@@ -221,18 +249,6 @@ def evaluate_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
     return {
         "Score": total_score,
         "Close": latest_close,
-        "Fast_EMA": latest_fast,
-        "Slow_EMA": latest_slow,
-        "MA_Gap": ma_gap_pct,
-        "Period_Return": period_return_pct,
-        "Flow_Score": flow_score,
-        "Alpha_Pct": alpha_pct,
-        "Vol_Ratio": vol_ratio,
-        "Max_Drawdown": max_dd_pct,
-        "Dist_52W_High": dist_52w_high_pct,
-        "RSI": rsi_val,
-        "Sharpe": sharpe_ratio,
-        "ATR_Pct": atr_pct,
         "Pass_MA": rule_ma_passed,
         "Pass_Perf": rule_perf_passed,
         "Pass_Flow": rule_flow_passed,
@@ -255,10 +271,11 @@ st.title("🎯 Custom ETF Screener & Scoring Engine")
 benchmark_df = fetch_etf_history("SPY")
 
 # Navigation Tabs
-tab_config, tab_screen, tab_single = st.tabs([
+tab_config, tab_screen, tab_single, tab_history = st.tabs([
     "⚙️ Points Configurator",
     "📊 Batch Universe Screener",
-    "🔍 Single Symbol Scorecard"
+    "🔍 Single Symbol Scorecard",
+    "📜 Historical Tracker"
 ])
 
 
@@ -296,43 +313,20 @@ with tab_config:
         st.error(f"⚠️ Current total is **{total_raw_points} pts**. Adjust weights to reach **100** ({action_str}).")
 
 
-# Extract weights directly from the table rows
+# Extract weights directly
 weights = edited_df["My Weight"].tolist()
 RULE_PARAMS = {
-    "ema_fast": 20,
-    "ema_slow": 50,
-    "weight_ma": int(weights[0]),
-    "perf_days": 60,
-    "min_return_pct": 2.0,
-    "weight_perf": int(weights[1]),
-    "min_flow_score": 50.0,
-    "weight_flow": int(weights[2]),
-    "min_alpha_pct": 1.0,
-    "weight_rs": int(weights[3]),
-    "min_vol_ratio": 1.1,
-    "weight_vol_exp": int(weights[4]),
-    "max_drawdown_pct": 10.0,
-    "weight_dd": int(weights[5]),
-    "max_dist_52w_pct": 8.0,
-    "weight_52w": int(weights[6]),
-    "min_rsi": 45.0,
-    "max_rsi": 70.0,
-    "weight_rsi": int(weights[7]),
-    "min_sharpe": 0.5,
-    "weight_sharpe": int(weights[8]),
-    "max_atr_pct": 2.5,
-    "weight_atr": int(weights[9])
+    "ema_fast": 20, "ema_slow": 50, "weight_ma": int(weights[0]),
+    "perf_days": 60, "min_return_pct": 2.0, "weight_perf": int(weights[1]),
+    "min_flow_score": 50.0, "weight_flow": int(weights[2]),
+    "min_alpha_pct": 1.0, "weight_rs": int(weights[3]),
+    "min_vol_ratio": 1.1, "weight_vol_exp": int(weights[4]),
+    "max_drawdown_pct": 10.0, "weight_dd": int(weights[5]),
+    "max_dist_52w_pct": 8.0, "weight_52w": int(weights[6]),
+    "min_rsi": 45.0, "max_rsi": 70.0, "weight_rsi": int(weights[7]),
+    "min_sharpe": 0.5, "weight_sharpe": int(weights[8]),
+    "max_atr_pct": 2.5, "weight_atr": int(weights[9])
 }
-
-
-# Sidebar Status Display
-st.sidebar.title("📊 System Status")
-if is_points_valid:
-    st.sidebar.success(f"**Total Points: {total_raw_points} / 100**\n\nRule set is balanced and valid.")
-else:
-    diff = 100 - total_raw_points
-    action_str = f"Add {diff} pts" if diff > 0 else f"Subtract {abs(diff)} pts"
-    st.sidebar.error(f"**Total Points: {total_raw_points} / 100**\n\nAction required: **{action_str}** in the Configurator table.")
 
 
 # ==============================================================================
@@ -342,10 +336,7 @@ with tab_screen:
     st.header("Custom Universe Screening")
 
     if not is_points_valid:
-        st.error(
-            f"⚠️ **Point allocation total is currently {total_raw_points} pts.** "
-            f"Switch to the **⚙️ Points Configurator** tab to balance points to **100 total points**."
-        )
+        st.error(f"⚠️ Point allocation total is currently {total_raw_points} pts. Please balance weights to 100.")
 
     user_input = st.text_area(
         "Enter ETF Tickers (comma or space separated):",
@@ -371,6 +362,7 @@ with tab_screen:
                 results.append({
                     "Ticker": ticker,
                     "Total Score": eval_res["Score"],
+                    "Price_Raw": eval_res['Close'],
                     "Price": f"${eval_res['Close']:.2f}",
                     "Trend": "✅ Pass" if eval_res["Pass_MA"] else "❌ Fail",
                     "Return": "✅ Pass" if eval_res["Pass_Perf"] else "❌ Fail",
@@ -382,9 +374,6 @@ with tab_screen:
                     "RSI Band": "✅ Pass" if eval_res["Pass_RSI"] else "❌ Fail",
                     "Sharpe": "✅ Pass" if eval_res["Pass_Sharpe"] else "❌ Fail",
                     "ATR Squeeze": "✅ Pass" if eval_res["Pass_ATR"] else "❌ Fail",
-                    "Alpha vs SPY": f"{eval_res['Alpha_Pct']:+.2f}%",
-                    "Max Drawdown": f"{eval_res['Max_Drawdown']:.2f}%",
-                    "Off 52W High": f"-{eval_res['Dist_52W_High']:.2f}%"
                 })
             
             progress_bar.progress((idx + 1) / len(tickers_list))
@@ -392,17 +381,33 @@ with tab_screen:
         progress_bar.empty()
 
         if results:
-            res_df = pd.DataFrame(results).sort_values(by="Total Score", ascending=False).reset_index(drop=True)
+            # Save run snapshot
+            save_run_snapshot(results)
+            prior_run = get_previous_run_data()
+
+            # Merge Weekly Delta
+            res_df = pd.DataFrame(results)
+            changes = []
+            for _, row in res_df.iterrows():
+                t = row["Ticker"]
+                if not prior_run.empty and t in prior_run.index:
+                    prev_s = prior_run.loc[t, "Total_Score"]
+                    diff = row["Total Score"] - prev_s
+                    changes.append(f"{diff:+d} pts" if diff != 0 else "0 pts")
+                else:
+                    changes.append("New")
+            
+            res_df.insert(2, "vs Prior Run", changes)
+            res_df = res_df.sort_values(by="Total Score", ascending=False).reset_index(drop=True)
+
             st.dataframe(
-                res_df,
+                res_df.drop(columns=["Price_Raw"]),
                 hide_index=True,
                 column_config={
                     "Total Score": st.column_config.ProgressColumn(
-                        "Total Score",
-                        format="%d pts",
-                        min_value=0,
-                        max_value=100
-                    )
+                        "Total Score", format="%d pts", min_value=0, max_value=100
+                    ),
+                    "vs Prior Run": st.column_config.TextColumn("vs Prior Run")
                 },
                 use_container_width=True
             )
@@ -420,15 +425,27 @@ with tab_single:
 
     if lookup_ticker:
         if not is_points_valid:
-            st.warning("⚠️ Points allocation total must equal exactly 100 points. Please adjust rules in the Configurator table.")
+            st.warning("⚠️ Points allocation total must equal exactly 100 points.")
         else:
             with st.spinner(f"Fetching and analyzing {lookup_ticker}..."):
                 df = fetch_etf_history(lookup_ticker)
                 res = evaluate_rules(df, benchmark_df, RULE_PARAMS)
 
             if res:
-                st.markdown(f"### Composite Score for **{lookup_ticker}**: `{res['Score']} / 100` Points")
+                prior_run = get_previous_run_data()
+                delta_str = None
+                if not prior_run.empty and lookup_ticker in prior_run.index:
+                    prev_score = prior_run.loc[lookup_ticker, "Total_Score"]
+                    diff = res["Score"] - prev_score
+                    delta_str = f"{diff:+d} pts vs previous run"
 
+                st.metric(
+                    label=f"Composite Score for {lookup_ticker}",
+                    value=f"{res['Score']} / 100 Points",
+                    delta=delta_str
+                )
+
+                st.markdown("---")
                 c1, c2, c3 = st.columns(3)
                 with c1:
                     status_ma = "✅ PASS" if res["Pass_MA"] else "❌ FAIL"
@@ -487,3 +504,32 @@ with tab_single:
                     st.metric("10. ATR Volatility", status_atr, delta=f"{pts_atr} / {RULE_PARAMS['weight_atr']} pts")
             else:
                 st.error(f"Could not retrieve historical data for '{lookup_ticker}'.")
+
+
+# ==============================================================================
+# TAB 4: HISTORICAL TRACKER
+# ==============================================================================
+with tab_history:
+    st.header("Weekly Score History")
+
+    if os.path.exists(SNAPSHOT_FILE):
+        history_df = pd.read_csv(SNAPSHOT_FILE)
+        
+        if not history_df.empty:
+            dates = sorted(history_df["Run_Date"].unique(), reverse=True)
+            st.markdown(f"**Total Historical Runs Logged:** `{len(dates)}`")
+            
+            # Pivot table for historical trend chart
+            pivot_df = history_df.pivot(index="Run_Date", columns="Ticker", values="Total_Score")
+            
+            st.subheader("Score Trajectory")
+            st.line_chart(pivot_df)
+
+            st.subheader("Historical Log Table")
+            selected_date = st.selectbox("Select Run Snapshot Date:", dates)
+            filtered_log = history_df[history_df["Run_Date"] == selected_date].copy()
+            st.dataframe(filtered_log.drop(columns=["Run_Date"]), hide_index=True, use_container_width=True)
+        else:
+            st.info("No historical snapshots saved yet. Run a batch screen to start logging.")
+    else:
+        st.info("No historical snapshots saved yet. Run a batch screen to start logging.")
