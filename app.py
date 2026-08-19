@@ -3,9 +3,9 @@ app.py
 ======
 Modular ETF Rule Configurator & Scoring Engine (10 Rules)
 Features:
-- Main-tab Point Configurator alongside Screener and Scorecard.
-- Direct raw slider point allocation per rule (No auto-normalization).
-- Real-time 100-point total validation enabling adjustments regardless of error state.
+- Main-tab Points Configurator presented as an interactive Data Editor Table.
+- Direct table cell editing for raw points and technical parameters.
+- Real-time 100-point total validation across all rules.
 """
 
 import streamlit as st
@@ -39,6 +39,21 @@ st.markdown("""
 
 if "user_tickers" not in st.session_state:
     st.session_state["user_tickers"] = "VFLO, SCHD, SCYB, JPST, JAAA, VEA, DIVI, EMXC, SMH, XLK, QQQ, SPY"
+
+# Default configuration table dataframe
+if "config_df" not in st.session_state:
+    st.session_state["config_df"] = pd.DataFrame([
+        {"Rule ID": 1, "Rule Name": "Moving Average Trend", "Param 1 (Fast / Min / Range)": 20.0, "Param 2 (Slow / Max)": 50.0, "Allocated Points": 15},
+        {"Rule ID": 2, "Rule Name": "Absolute Return", "Param 1 (Fast / Min / Range)": 60.0, "Param 2 (Slow / Max)": 2.0, "Allocated Points": 10},
+        {"Rule ID": 3, "Rule Name": "Institutional Money Flow", "Param 1 (Fast / Min / Range)": 50.0, "Param 2 (Slow / Max)": 0.0, "Allocated Points": 10},
+        {"Rule ID": 4, "Rule Name": "Relative Strength vs SPY", "Param 1 (Fast / Min / Range)": 1.0, "Param 2 (Slow / Max)": 0.0, "Allocated Points": 15},
+        {"Rule ID": 5, "Rule Name": "Volume Expansion", "Param 1 (Fast / Min / Range)": 1.1, "Param 2 (Slow / Max)": 0.0, "Allocated Points": 10},
+        {"Rule ID": 6, "Rule Name": "Max Trailing Drawdown", "Param 1 (Fast / Min / Range)": 10.0, "Param 2 (Slow / Max)": 0.0, "Allocated Points": 10},
+        {"Rule ID": 7, "Rule Name": "52-Week High Proximity", "Param 1 (Fast / Min / Range)": 8.0, "Param 2 (Slow / Max)": 0.0, "Allocated Points": 10},
+        {"Rule ID": 8, "Rule Name": "RSI Band Filter", "Param 1 (Fast / Min / Range)": 45.0, "Param 2 (Slow / Max)": 70.0, "Allocated Points": 10},
+        {"Rule ID": 9, "Rule Name": "Risk-Adjusted Sharpe Ratio", "Param 1 (Fast / Min / Range)": 0.5, "Param 2 (Slow / Max)": 0.0, "Allocated Points": 10},
+        {"Rule ID": 10, "Rule Name": "ATR Volatility Squeeze", "Param 1 (Fast / Min / Range)": 2.5, "Param 2 (Slow / Max)": 0.0, "Allocated Points": 10},
+    ])
 
 
 # ==============================================================================
@@ -231,14 +246,14 @@ def evaluate_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
 
 
 # ==============================================================================
-# MAIN APPLICATION & TABS
+# MAIN APPLICATION INTERFACE
 # ==============================================================================
 
 st.title("🎯 Custom ETF Screener & Scoring Engine")
 
 benchmark_df = fetch_etf_history("SPY")
 
-# Navigation Tabs with Points Configurator integrated into main view
+# Navigation Tabs
 tab_config, tab_screen, tab_single = st.tabs([
     "⚙️ Points Configurator",
     "📊 Batch Universe Screener",
@@ -247,88 +262,69 @@ tab_config, tab_screen, tab_single = st.tabs([
 
 
 # ==============================================================================
-# TAB 1: POINTS CONFIGURATOR
+# TAB 1: POINTS CONFIGURATOR (TABLE FORMAT)
 # ==============================================================================
 with tab_config:
-    st.header("Rules & Points Allocation")
-    st.caption("Adjust points assigned to each technical rule. The grand total across all 10 rules must equal exactly **100 points**.")
+    st.header("Rules & Points Allocation Table")
+    st.caption("Edit parameter targets and raw points directly in the table cells below. Total points must equal **100**.")
 
-    col1, col2 = st.columns(2)
+    # Interactive Data Editor
+    edited_df = st.data_editor(
+        st.session_state["config_df"],
+        hide_index=True,
+        use_container_width=True,
+        column_config={
+            "Rule ID": st.column_config.NumberColumn("Rule #", disabled=True, format="%d"),
+            "Rule Name": st.column_config.TextColumn("Rule Target & Name", disabled=True),
+            "Param 1 (Fast / Min / Range)": st.column_config.NumberColumn("Threshold / Fast Span", step=0.5, format="%.1f"),
+            "Param 2 (Slow / Max)": st.column_config.NumberColumn("Limit / Slow Span", step=0.5, format="%.1f"),
+            "Allocated Points": st.column_config.NumberColumn("Points Allocation", min_value=0, max_value=100, step=1, format="%d pts")
+        },
+        key="table_editor"
+    )
 
-    with col1:
-        st.subheader("1. Trend Rule (EMA)")
-        ema_fast_val = st.number_input("Fast EMA Span (Days)", value=20, step=5)
-        ema_slow_val = st.number_input("Slow EMA Span (Days)", value=50, step=5)
-        raw_ma = st.slider("Points: Rule 1", 0, 100, 15, key="p_ma")
+    # Keep session state updated with edited table
+    st.session_state["config_df"] = edited_df
 
-        st.subheader("2. Absolute Return")
-        perf_days_val = st.number_input("Lookback Window (Days)", value=60, step=10)
-        min_return_val = st.number_input("Min Required Return (%)", value=2.0, step=0.5)
-        raw_perf = st.slider("Points: Rule 2", 0, 100, 10, key="p_perf")
+    # Total points sum calculation
+    total_raw_points = int(edited_df["Allocated Points"].sum())
+    is_points_valid = (total_raw_points == 100)
 
-        st.subheader("3. Money Flow Rule")
-        min_flow_val = st.slider("Min Money Flow Score", 0, 100, 50)
-        raw_flow = st.slider("Points: Rule 3", 0, 100, 10, key="p_flow")
-
-        st.subheader("4. Relative Strength vs SPY")
-        min_alpha_val = st.number_input("Min Excess Alpha vs SPY (%)", value=1.0, step=0.5)
-        raw_rs = st.slider("Points: Rule 4", 0, 100, 15, key="p_rs")
-
-        st.subheader("5. Volume Expansion")
-        min_vol_ratio_val = st.number_input("Min Volume Ratio (5D/50D)", value=1.1, step=0.1)
-        raw_vol_exp = st.slider("Points: Rule 5", 0, 100, 10, key="p_vol")
-
-    with col2:
-        st.subheader("6. Trailing Max Drawdown Filter")
-        max_dd_val = st.number_input("Max Allowed Drawdown (%)", value=10.0, step=1.0)
-        raw_dd = st.slider("Points: Rule 6", 0, 100, 10, key="p_dd")
-
-        st.subheader("7. Proximity to 52-Week High")
-        max_dist_52w_val = st.number_input("Max % Distance from High", value=8.0, step=1.0)
-        raw_52w = st.slider("Points: Rule 7", 0, 100, 10, key="p_52w")
-
-        st.subheader("8. RSI Range Filter")
-        min_rsi_val = st.number_input("Min RSI (Not Oversold)", value=45.0, step=5.0)
-        max_rsi_val = st.number_input("Max RSI (Not Overbought)", value=70.0, step=5.0)
-        raw_rsi = st.slider("Points: Rule 8", 0, 100, 10, key="p_rsi")
-
-        st.subheader("9. Risk-Adjusted Sharpe Ratio")
-        min_sharpe_val = st.number_input("Min Sharpe Ratio", value=0.5, step=0.1)
-        raw_sharpe = st.slider("Points: Rule 9", 0, 100, 10, key="p_sharpe")
-
-        st.subheader("10. Volatility Squeeze (ATR %)")
-        max_atr_val = st.number_input("Max Allowed ATR % of Price", value=2.5, step=0.5)
-        raw_atr = st.slider("Points: Rule 10", 0, 100, 10, key="p_atr")
+    st.markdown("---")
+    if is_points_valid:
+        st.success(f" Total Points Allocated: **{total_raw_points} / 100 Points** (Rule set is valid and active)")
+    else:
+        diff = 100 - total_raw_points
+        action_str = f"Add {diff} pts" if diff > 0 else f"Subtract {abs(diff)} pts"
+        st.error(f" Total Points Allocated: **{total_raw_points} / 100 Points** ({action_str} in table above)")
 
 
-# Calculate real-time totals and state validation
-total_raw_points = sum([raw_ma, raw_perf, raw_flow, raw_rs, raw_vol_exp, raw_dd, raw_52w, raw_rsi, raw_sharpe, raw_atr])
-is_points_valid = (total_raw_points == 100)
-
+# Parse parameters from dataframe for scoring engine
+rows = edited_df.to_dict("records")
 RULE_PARAMS = {
-    "ema_fast": ema_fast_val,
-    "ema_slow": ema_slow_val,
-    "weight_ma": raw_ma,
-    "perf_days": perf_days_val,
-    "min_return_pct": min_return_val,
-    "weight_perf": raw_perf,
-    "min_flow_score": min_flow_val,
-    "weight_flow": raw_flow,
-    "min_alpha_pct": min_alpha_val,
-    "weight_rs": raw_rs,
-    "min_vol_ratio": min_vol_ratio_val,
-    "weight_vol_exp": raw_vol_exp,
-    "max_drawdown_pct": max_dd_val,
-    "weight_dd": raw_dd,
-    "max_dist_52w_pct": max_dist_52w_val,
-    "weight_52w": raw_52w,
-    "min_rsi": min_rsi_val,
-    "max_rsi": max_rsi_val,
-    "weight_rsi": raw_rsi,
-    "min_sharpe": min_sharpe_val,
-    "weight_sharpe": raw_sharpe,
-    "max_atr_pct": max_atr_val,
-    "weight_atr": raw_atr
+    "ema_fast": int(rows[0]["Param 1 (Fast / Min / Range)"]),
+    "ema_slow": int(rows[0]["Param 2 (Slow / Max)"]),
+    "weight_ma": int(rows[0]["Allocated Points"]),
+    "perf_days": int(rows[1]["Param 1 (Fast / Min / Range)"]),
+    "min_return_pct": float(rows[1]["Param 2 (Slow / Max)"]),
+    "weight_perf": int(rows[1]["Allocated Points"]),
+    "min_flow_score": float(rows[2]["Param 1 (Fast / Min / Range)"]),
+    "weight_flow": int(rows[2]["Allocated Points"]),
+    "min_alpha_pct": float(rows[3]["Param 1 (Fast / Min / Range)"]),
+    "weight_rs": int(rows[3]["Allocated Points"]),
+    "min_vol_ratio": float(rows[4]["Param 1 (Fast / Min / Range)"]),
+    "weight_vol_exp": int(rows[4]["Allocated Points"]),
+    "max_drawdown_pct": float(rows[5]["Param 1 (Fast / Min / Range)"]),
+    "weight_dd": int(rows[5]["Allocated Points"]),
+    "max_dist_52w_pct": float(rows[6]["Param 1 (Fast / Min / Range)"]),
+    "weight_52w": int(rows[6]["Allocated Points"]),
+    "min_rsi": float(rows[7]["Param 1 (Fast / Min / Range)"]),
+    "max_rsi": float(rows[7]["Param 2 (Slow / Max)"]),
+    "weight_rsi": int(rows[7]["Allocated Points"]),
+    "min_sharpe": float(rows[8]["Param 1 (Fast / Min / Range)"]),
+    "weight_sharpe": int(rows[8]["Allocated Points"]),
+    "max_atr_pct": float(rows[9]["Param 1 (Fast / Min / Range)"]),
+    "weight_atr": int(rows[9]["Allocated Points"])
 }
 
 
@@ -339,7 +335,7 @@ if is_points_valid:
 else:
     diff = 100 - total_raw_points
     action_str = f"Add {diff} pts" if diff > 0 else f"Subtract {abs(diff)} pts"
-    st.sidebar.error(f"**Total Points: {total_raw_points} / 100**\n\nAction required: **{action_str}** in the Points Configurator tab.")
+    st.sidebar.error(f"**Total Points: {total_raw_points} / 100**\n\nAction required: **{action_str}** in the Configurator table.")
 
 
 # ==============================================================================
@@ -427,7 +423,7 @@ with tab_single:
 
     if lookup_ticker:
         if not is_points_valid:
-            st.warning("⚠️ Points allocation total must equal exactly 100 points. Please adjust rules in the Configurator tab.")
+            st.warning("⚠️ Points allocation total must equal exactly 100 points. Please adjust rules in the Configurator table.")
         else:
             with st.spinner(f"Fetching and analyzing {lookup_ticker}..."):
                 df = fetch_etf_history(lookup_ticker)
