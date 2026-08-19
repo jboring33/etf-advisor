@@ -4,8 +4,8 @@ app.py
 Modular ETF Rule Configurator & Scoring Engine (10 Rules)
 Features:
 - Configurator moved to Sidebar (⚙️ icon menu).
-- Tab renamed to Portfolio with interactive ticker inspection.
-- Clicking/selecting a ticker directly renders the Single Symbol Scorecard with detailed math & guidance.
+- Primary screen titled Portfolio.
+- Selecting a ticker opens the Scorecard inside a native Modal Window.
 """
 
 import os
@@ -320,10 +320,14 @@ def evaluate_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
     }
 
 
-def render_scorecard(ticker: str, benchmark_df: pd.DataFrame, params: dict):
-    """Renders single symbol scorecard breakdown inline under the table."""
-    st.markdown("---")
-    st.subheader(f"🔍 Scorecard Breakdown: {ticker}")
+# ==============================================================================
+# MODAL SCORECARD WINDOW (@st.dialog)
+# ==============================================================================
+
+@st.dialog("🔍 Scorecard Breakdown", width="large")
+def show_scorecard_modal(ticker: str, benchmark_df: pd.DataFrame, params: dict):
+    """Renders the ETF Scorecard inside a native popup modal window."""
+    st.subheader(f"Scorecard: {ticker}")
 
     with st.spinner(f"Analyzing {ticker}..."):
         df = fetch_etf_history(ticker)
@@ -466,7 +470,7 @@ RULE_PARAMS = {
 
 
 # ==============================================================================
-# MAIN INTERFACE: PORTFOLIO SCREENER & DRILLDOWN
+# MAIN INTERFACE: PORTFOLIO SCREENER
 # ==============================================================================
 
 st.title("🎯 Portfolio ETF Screener & Analysis")
@@ -538,10 +542,10 @@ if st.button("Run Portfolio Screen", type="primary", disabled=not is_points_vali
         st.warning("Could not retrieve valid historical data for any provided tickers.")
 
 
-# Display interactive results and trigger scorecard drilldown
+# Display interactive results table
 if "last_screener_df" in st.session_state and not st.session_state["last_screener_df"].empty:
     st.subheader("Portfolio Scoring Matrix")
-    st.caption("💡 Select any row/ticker to trigger its detailed Scorecard below.")
+    st.caption("💡 Select any row to pop open its detailed Scorecard modal window.")
 
     screener_df = st.session_state["last_screener_df"]
     
@@ -559,18 +563,8 @@ if "last_screener_df" in st.session_state and not st.session_state["last_screene
         selection_mode="single-row"
     )
 
-    selected_ticker = None
+    # Open Modal Window on Table Click Selection
     if event and event.selection and event.selection.rows:
         selected_index = event.selection.rows[0]
         selected_ticker = screener_df.iloc[selected_index]["Ticker"]
-
-    # Render scorecard directly on table click/selection
-    if selected_ticker:
-        render_scorecard(selected_ticker, benchmark_df, RULE_PARAMS)
-    else:
-        # Quick fallback selector dropdown for easy interaction
-        st.markdown("---")
-        available_tickers = screener_df["Ticker"].tolist()
-        manual_select = st.selectbox("Or select a ticker to view its scorecard:", ["-- Select Ticker --"] + available_tickers)
-        if manual_select != "-- Select Ticker --":
-            render_scorecard(manual_select, benchmark_df, RULE_PARAMS)
+        show_scorecard_modal(selected_ticker, benchmark_df, RULE_PARAMS)
