@@ -1,4 +1,3 @@
-"""
 app.py
 ======
 Modular ETF Rule Configurator & Scoring Engine (10 Rules)
@@ -6,7 +5,6 @@ Features:
 - Streamlined 3-column Points Configurator [Rule #, Rule Name, My Weight].
 - Automated Weekly Snapshot saving & historical comparison engine.
 - Delta tracking (+/- pts) in Batch Universe Screener & Single Symbol Scorecard.
-- Dedicated Historical Tracker tab for week-over-week trend analysis.
 """
 
 import os
@@ -271,11 +269,10 @@ st.title("🎯 Custom ETF Screener & Scoring Engine")
 benchmark_df = fetch_etf_history("SPY")
 
 # Navigation Tabs
-tab_config, tab_screen, tab_single, tab_history = st.tabs([
+tab_config, tab_screen, tab_single = st.tabs([
     "⚙️ Points Configurator",
     "📊 Batch Universe Screener",
-    "🔍 Single Symbol Scorecard",
-    "📜 Historical Tracker"
+    "🔍 Single Symbol Scorecard"
 ])
 
 
@@ -502,32 +499,3 @@ with tab_single:
                     st.metric("10. ATR Volatility", status_atr, delta=f"{pts_atr} / {RULE_PARAMS['weight_atr']} pts")
             else:
                 st.error(f"Could not retrieve historical data for '{lookup_ticker}'.")
-
-
-# ==============================================================================
-# TAB 4: HISTORICAL TRACKER
-# ==============================================================================
-with tab_history:
-    st.header("Weekly Score History")
-
-    if os.path.exists(SNAPSHOT_FILE):
-        history_df = pd.read_csv(SNAPSHOT_FILE)
-        
-        if not history_df.empty:
-            dates = sorted(history_df["Run_Date"].unique(), reverse=True)
-            st.markdown(f"**Total Historical Runs Logged:** `{len(dates)}`")
-            
-            # Pivot table for historical trend chart
-            pivot_df = history_df.pivot(index="Run_Date", columns="Ticker", values="Total_Score")
-            
-            st.subheader("Score Trajectory")
-            st.line_chart(pivot_df)
-
-            st.subheader("Historical Log Table")
-            selected_date = st.selectbox("Select Run Snapshot Date:", dates)
-            filtered_log = history_df[history_df["Run_Date"] == selected_date].copy()
-            st.dataframe(filtered_log.drop(columns=["Run_Date"]), hide_index=True, use_container_width=True)
-        else:
-            st.info("No historical snapshots saved yet. Run a batch screen to start logging.")
-    else:
-        st.info("No historical snapshots saved yet. Run a batch screen to start logging.")
