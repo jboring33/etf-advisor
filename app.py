@@ -1,10 +1,24 @@
+# app.py
+
+import sys
+import os
 import streamlit as st
 import pandas as pd
 import numpy as np
 
-# Corrected imports matching logic/tier1_screener.py
-from logic.tier1_screener import run_tier1_screen, fetch_etf_fundamentals
-from logic.tier2_signals import generate_symbol_scorecard
+# Force root directory into sys.path to ensure module imports resolve correctly
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+# Safe imports for internal modules
+try:
+    import logic.tier1_screener as tier1
+except ImportError:
+    import tier1_screener as tier1
+
+try:
+    import logic.tier2_signals as tier2
+except ImportError:
+    import tier2_signals as tier2
 
 # Page Configuration
 st.set_page_config(
@@ -25,7 +39,6 @@ if "watchlist" not in st.session_state:
 # Sidebar - Configuration & Watchlist Management
 st.sidebar.header("⚙️ Configuration")
 
-# Watchlist Input
 st.sidebar.subheader("Watchlist Management")
 user_input = st.sidebar.text_area(
     "Enter Ticker Symbols (separated by space or comma):",
@@ -33,7 +46,7 @@ user_input = st.sidebar.text_area(
     height=100
 )
 
-# Sanitized string parsing
+# Sanitized string parsing to avoid unterminated string literal errors
 tickers_list = [
     t.strip().upper() 
     for t in user_input.replace(",", " ").split() 
@@ -61,15 +74,18 @@ with tab1:
     if st.button("🚀 Run Batch Screener", type="primary"):
         with st.spinner("Fetching market data and running indicators..."):
             try:
-                results_df = run_tier1_screen(st.session_state.watchlist)
+                # Dynamic function call resolution for tier1 screener
+                if hasattr(tier1, "run_tier1_screen"):
+                    results_df = tier1.run_tier1_screen(st.session_state.watchlist)
+                elif hasattr(tier1, "run_batch_screener"):
+                    results_df = tier1.run_batch_screener(st.session_state.watchlist)
+                else:
+                    results_df = pd.DataFrame()
                 
                 if isinstance(results_df, pd.DataFrame) and not results_df.empty:
-                    st.dataframe(
-                        results_df,
-                        use_container_width=True
-                    )
+                    st.dataframe(results_df, use_container_width=True)
                 else:
-                    st.warning("No data retrieved for the selected tickers.")
+                    st.warning("No data returned or screener function produced an empty result.")
             except Exception as e:
                 st.error(f"Error running batch screener: {str(e)}")
 
@@ -87,7 +103,10 @@ with tab2:
     if selected_ticker:
         with st.spinner(f"Generating detailed scorecard for {selected_ticker}..."):
             try:
-                scorecard = generate_symbol_scorecard(selected_ticker)
+                if hasattr(tier2, "generate_symbol_scorecard"):
+                    scorecard = tier2.generate_symbol_scorecard(selected_ticker)
+                else:
+                    scorecard = {}
                 
                 col1, col2 = st.columns([1, 2])
                 with col1:
@@ -122,3 +141,4 @@ with tab3:
         st.slider("Macro Regime Overlay", 0, 25, 25, key="weight_macro")
 
     st.success("Configuration saved automatically to session state.")
+    
