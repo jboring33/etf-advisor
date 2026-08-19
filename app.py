@@ -3,8 +3,8 @@ app.py
 ======
 Modular ETF Rule Configurator & Scoring Engine (10 Rules)
 Features:
-- Explicit point allocation per rule in sidebar.
-- Automatic weight normalization ensuring maximum total score is ALWAYS 100 points.
+- Direct raw slider point allocation per rule (No point normalization).
+- Real-time total point validation enforcing an exact total of 100 points.
 - Batch Universe Screener & Single Symbol Scorecard fully in sync across all 10 rules.
 """
 
@@ -100,11 +100,11 @@ def calculate_atr_ratio(df: pd.DataFrame, period: int = 14) -> float:
 
 
 # ==============================================================================
-# SCORING & RULE EVALUATION ENGINE (100-POINT CAP)
+# SCORING & RULE EVALUATION ENGINE (RAW POINTS)
 # ==============================================================================
 
 def evaluate_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
-    """Evaluates 10 technical rules and applies normalized point scaling."""
+    """Evaluates 10 technical rules using raw point assignments."""
     if df.empty or len(df) < params["ema_slow"]:
         return None
 
@@ -189,8 +189,8 @@ def evaluate_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
     atr_pct = calculate_atr_ratio(df, period=14)
     rule_atr_passed = atr_pct <= params["max_atr_pct"]
 
-    # Score Calculation (100 Point Scaling)
-    total_score = 0.0
+    # Score Calculation (Direct Raw Sum)
+    total_score = 0
     if rule_ma_passed: total_score += params["weight_ma"]
     if rule_perf_passed: total_score += params["weight_perf"]
     if rule_flow_passed: total_score += params["weight_flow"]
@@ -203,7 +203,7 @@ def evaluate_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
     if rule_atr_passed: total_score += params["weight_atr"]
 
     return {
-        "Score": round(total_score, 1),
+        "Score": total_score,
         "Close": latest_close,
         "Fast_EMA": latest_fast,
         "Slow_EMA": latest_slow,
@@ -231,121 +231,108 @@ def evaluate_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
 
 
 # ==============================================================================
-# SIDEBAR: EXPLICIT POINT ALLOCATION PER RULE (100 TOTAL PTS)
+# SIDEBAR: DIRECT RAW POINTS ALLOCATION & 100-POINT TOTAL CHECK
 # ==============================================================================
 
-st.sidebar.header("🎯 Points Allocation Per Rule")
-st.sidebar.caption("Adjust sliders below to allocate points to each rule. Points automatically normalize to equal **100 Total Points**.")
+st.sidebar.header("⚙️ Rule & Raw Points Configurator")
+st.sidebar.caption("Set the raw points for each rule below. **Total points must equal exactly 100.**")
 
-# Explicit Point Sliders
-st.sidebar.markdown("---")
 st.sidebar.subheader("1. Trend Rule (EMA)")
 ema_fast_val = st.sidebar.number_input("Fast EMA Span (Days)", value=20, step=5)
 ema_slow_val = st.sidebar.number_input("Slow EMA Span (Days)", value=50, step=5)
-raw_ma = st.sidebar.slider("Points Allocation: Rule 1", 0, 50, 15, key="p_ma")
+raw_ma = st.sidebar.slider("Points: Rule 1", 0, 100, 15, key="p_ma")
 
 st.sidebar.subheader("2. Absolute Return")
 perf_days_val = st.sidebar.number_input("Lookback Window (Days)", value=60, step=10)
 min_return_val = st.sidebar.number_input("Min Required Return (%)", value=2.0, step=0.5)
-raw_perf = st.sidebar.slider("Points Allocation: Rule 2", 0, 50, 10, key="p_perf")
+raw_perf = st.sidebar.slider("Points: Rule 2", 0, 100, 10, key="p_perf")
 
 st.sidebar.subheader("3. Money Flow Rule")
 min_flow_val = st.sidebar.slider("Min Money Flow Score", 0, 100, 50)
-raw_flow = st.sidebar.slider("Points Allocation: Rule 3", 0, 50, 10, key="p_flow")
+raw_flow = st.sidebar.slider("Points: Rule 3", 0, 100, 10, key="p_flow")
 
 st.sidebar.subheader("4. Relative Strength vs SPY")
 min_alpha_val = st.sidebar.number_input("Min Excess Alpha vs SPY (%)", value=1.0, step=0.5)
-raw_rs = st.sidebar.slider("Points Allocation: Rule 4", 0, 50, 15, key="p_rs")
+raw_rs = st.sidebar.slider("Points: Rule 4", 0, 100, 15, key="p_rs")
 
 st.sidebar.subheader("5. Volume Expansion")
 min_vol_ratio_val = st.sidebar.number_input("Min Volume Ratio (5D/50D)", value=1.1, step=0.1)
-raw_vol_exp = st.sidebar.slider("Points Allocation: Rule 5", 0, 50, 10, key="p_vol")
+raw_vol_exp = st.sidebar.slider("Points: Rule 5", 0, 100, 10, key="p_vol")
 
 st.sidebar.subheader("6. Trailing Max Drawdown Filter")
 max_dd_val = st.sidebar.number_input("Max Allowed Drawdown (%)", value=10.0, step=1.0)
-raw_dd = st.sidebar.slider("Points Allocation: Rule 6", 0, 50, 10, key="p_dd")
+raw_dd = st.sidebar.slider("Points: Rule 6", 0, 100, 10, key="p_dd")
 
 st.sidebar.subheader("7. Proximity to 52-Week High")
 max_dist_52w_val = st.sidebar.number_input("Max % Distance from High", value=8.0, step=1.0)
-raw_52w = st.sidebar.slider("Points Allocation: Rule 7", 0, 50, 10, key="p_52w")
+raw_52w = st.sidebar.slider("Points: Rule 7", 0, 100, 10, key="p_52w")
 
 st.sidebar.subheader("8. RSI Range Filter")
 min_rsi_val = st.sidebar.number_input("Min RSI (Not Oversold)", value=45.0, step=5.0)
 max_rsi_val = st.sidebar.number_input("Max RSI (Not Overbought)", value=70.0, step=5.0)
-raw_rsi = st.sidebar.slider("Points Allocation: Rule 8", 0, 50, 10, key="p_rsi")
+raw_rsi = st.sidebar.slider("Points: Rule 8", 0, 100, 10, key="p_rsi")
 
 st.sidebar.subheader("9. Risk-Adjusted Sharpe Ratio")
 min_sharpe_val = st.sidebar.number_input("Min Sharpe Ratio", value=0.5, step=0.1)
-raw_sharpe = st.sidebar.slider("Points Allocation: Rule 9", 0, 50, 10, key="p_sharpe")
+raw_sharpe = st.sidebar.slider("Points: Rule 9", 0, 100, 10, key="p_sharpe")
 
 st.sidebar.subheader("10. Volatility Squeeze (ATR %)")
 max_atr_val = st.sidebar.number_input("Max Allowed ATR % of Price", value=2.5, step=0.5)
-raw_atr = st.sidebar.slider("Points Allocation: Rule 10", 0, 50, 10, key="p_atr")
+raw_atr = st.sidebar.slider("Points: Rule 10", 0, 100, 10, key="p_atr")
 
-# Sum and Normalize to exactly 100 Points
-raw_sum = max(1, sum([raw_ma, raw_perf, raw_flow, raw_rs, raw_vol_exp, raw_dd, raw_52w, raw_rsi, raw_sharpe, raw_atr]))
+# Total raw points sum validation
+total_raw_points = sum([raw_ma, raw_perf, raw_flow, raw_rs, raw_vol_exp, raw_dd, raw_52w, raw_rsi, raw_sharpe, raw_atr])
+is_points_valid = (total_raw_points == 100)
 
-w_ma = round((raw_ma / raw_sum) * 100, 1)
-w_perf = round((raw_perf / raw_sum) * 100, 1)
-w_flow = round((raw_flow / raw_sum) * 100, 1)
-w_rs = round((raw_rs / raw_sum) * 100, 1)
-w_vol_exp = round((raw_vol_exp / raw_sum) * 100, 1)
-w_dd = round((raw_dd / raw_sum) * 100, 1)
-w_52w = round((raw_52w / raw_sum) * 100, 1)
-w_rsi = round((raw_rsi / raw_sum) * 100, 1)
-w_sharpe = round((raw_sharpe / raw_sum) * 100, 1)
-w_atr = round((raw_atr / raw_sum) * 100, 1)
+st.sidebar.markdown("---")
+if is_points_valid:
+    st.sidebar.success(f" Total Points: **{total_raw_points} / 100** (Valid)")
+else:
+    diff = 100 - total_raw_points
+    action_str = f"Add {diff} pts" if diff > 0 else f"Subtract {abs(diff)} pts"
+    st.sidebar.error(f" Total Points: **{total_raw_points} / 100** ({action_str})")
 
 RULE_PARAMS = {
     "ema_fast": ema_fast_val,
     "ema_slow": ema_slow_val,
-    "weight_ma": w_ma,
+    "weight_ma": raw_ma,
     "perf_days": perf_days_val,
     "min_return_pct": min_return_val,
-    "weight_perf": w_perf,
+    "weight_perf": raw_perf,
     "min_flow_score": min_flow_val,
-    "weight_flow": w_flow,
+    "weight_flow": raw_flow,
     "min_alpha_pct": min_alpha_val,
-    "weight_rs": w_rs,
+    "weight_rs": raw_rs,
     "min_vol_ratio": min_vol_ratio_val,
-    "weight_vol_exp": w_vol_exp,
+    "weight_vol_exp": raw_vol_exp,
     "max_drawdown_pct": max_dd_val,
-    "weight_dd": w_dd,
+    "weight_dd": raw_dd,
     "max_dist_52w_pct": max_dist_52w_val,
-    "weight_52w": w_52w,
+    "weight_52w": raw_52w,
     "min_rsi": min_rsi_val,
     "max_rsi": max_rsi_val,
-    "weight_rsi": w_rsi,
+    "weight_rsi": raw_rsi,
     "min_sharpe": min_sharpe_val,
-    "weight_sharpe": w_sharpe,
+    "weight_sharpe": raw_sharpe,
     "max_atr_pct": max_atr_val,
-    "weight_atr": w_atr
+    "weight_atr": raw_atr
 }
 
 
 # ==============================================================================
-# MAIN INTERFACE
+# MAIN APPLICATION INTERFACE
 # ==============================================================================
 
 st.title("🎯 Custom ETF Screener & Scoring Engine")
 
+# Pre-fetch Benchmark (SPY) Data
 benchmark_df = fetch_etf_history("SPY")
 
-# Display Active Point Breakdown Expander
-with st.expander("📊 Active Rule Points Allocation Table (Normalized to 100 Total Points)"):
-    pts_df = pd.DataFrame([
-        {"Rule #": "Rule 1", "Rule Name": "Moving Average Trend", "Raw Slider Weight": raw_ma, "Normalized Points": f"{w_ma} pts"},
-        {"Rule #": "Rule 2", "Rule Name": "Absolute Return", "Raw Slider Weight": raw_perf, "Normalized Points": f"{w_perf} pts"},
-        {"Rule #": "Rule 3", "Rule Name": "Institutional Money Flow", "Raw Slider Weight": raw_flow, "Normalized Points": f"{w_flow} pts"},
-        {"Rule #": "Rule 4", "Rule Name": "Relative Strength vs SPY", "Raw Slider Weight": raw_rs, "Normalized Points": f"{w_rs} pts"},
-        {"Rule #": "Rule 5", "Rule Name": "Volume Expansion", "Raw Slider Weight": raw_vol_exp, "Normalized Points": f"{w_vol_exp} pts"},
-        {"Rule #": "Rule 6", "Rule Name": "Max Trailing Drawdown", "Raw Slider Weight": raw_dd, "Normalized Points": f"{w_dd} pts"},
-        {"Rule #": "Rule 7", "Rule Name": "52-Week High Proximity", "Raw Slider Weight": raw_52w, "Normalized Points": f"{w_52w} pts"},
-        {"Rule #": "Rule 8", "Rule Name": "RSI Band Filter", "Raw Slider Weight": raw_rsi, "Normalized Points": f"{w_rsi} pts"},
-        {"Rule #": "Rule 9", "Rule Name": "Sharpe Ratio Filter", "Raw Slider Weight": raw_sharpe, "Normalized Points": f"{w_sharpe} pts"},
-        {"Rule #": "Rule 10", "Rule Name": "ATR Volatility Squeeze", "Raw Slider Weight": raw_atr, "Normalized Points": f"{w_atr} pts"},
-    ])
-    st.dataframe(pts_df, hide_index=True, use_container_width=True)
+if not is_points_valid:
+    st.error(
+        f"⚠️ **Total allocated points currently equal {total_raw_points} pts.** "
+        f"Please adjust your sidebar sliders so that all 10 rules add up to **exactly 100 points**."
+    )
 
 tab_screen, tab_single = st.tabs([
     "📊 Batch Universe Screener",
@@ -358,7 +345,7 @@ tab_screen, tab_single = st.tabs([
 # ==============================================================================
 with tab_screen:
     st.header("Custom Universe Screening")
-    st.caption("Screen tickers scored against all 10 rules on a 100-point scale.")
+    st.caption("Screen tickers scored against all 10 rules on a direct 100-point total.")
 
     user_input = st.text_area(
         "Enter ETF Tickers (comma or space separated):",
@@ -372,7 +359,7 @@ with tab_screen:
 
     min_total_score = st.slider("Minimum Composite Score Filter (out of 100):", 0, 100, 50)
 
-    if st.button("Run Universe Screen", type="primary"):
+    if st.button("Run Universe Screen", type="primary", disabled=not is_points_valid):
         results = []
         progress_bar = st.progress(0)
         
@@ -412,7 +399,7 @@ with tab_screen:
                 column_config={
                     "Total Score": st.column_config.ProgressColumn(
                         "Total Score",
-                        format="%.1f pts",
+                        format="%d pts",
                         min_value=0,
                         max_value=100
                     )
@@ -428,93 +415,96 @@ with tab_screen:
 # ==============================================================================
 with tab_single:
     st.header("Single ETF Rule Breakdown")
-    st.caption("Detailed breakdown of assigned points per rule out of 100 points.")
+    st.caption("Detailed breakdown of direct raw assigned points per rule out of 100 points.")
 
     lookup_ticker = st.text_input("Enter Ticker Symbol:", value="", placeholder="e.g. EMXC, VFLO, SCHD").strip().upper()
 
     if lookup_ticker:
-        with st.spinner(f"Fetching and analyzing {lookup_ticker}..."):
-            df = fetch_etf_history(lookup_ticker)
-            res = evaluate_rules(df, benchmark_df, RULE_PARAMS)
-
-        if res:
-            st.markdown(f"### Composite Score for **{lookup_ticker}**: `{res['Score']} / 100` Points")
-
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                status_ma = "✅ PASS" if res["Pass_MA"] else "❌ FAIL"
-                pts_ma = RULE_PARAMS['weight_ma'] if res['Pass_MA'] else 0.0
-                st.metric("1. Trend Status", status_ma, delta=f"{pts_ma} / {RULE_PARAMS['weight_ma']} pts")
-                st.write(f"- Fast EMA ({RULE_PARAMS['ema_fast']}D): ${res['Fast_EMA']:.2f}")
-                st.write(f"- Slow EMA ({RULE_PARAMS['ema_slow']}D): ${res['Slow_EMA']:.2f}")
-
-            with c2:
-                status_perf = "✅ PASS" if res["Pass_Perf"] else "❌ FAIL"
-                pts_perf = RULE_PARAMS['weight_perf'] if res['Pass_Perf'] else 0.0
-                st.metric("2. Return Status", status_perf, delta=f"{pts_perf} / {RULE_PARAMS['weight_perf']} pts")
-                st.write(f"- Return: {res['Period_Return']:.2f}%")
-                st.write(f"- Min Target: {RULE_PARAMS['min_return_pct']}%")
-
-            with c3:
-                status_flow = "✅ PASS" if res["Pass_Flow"] else "❌ FAIL"
-                pts_flow = RULE_PARAMS['weight_flow'] if res['Pass_Flow'] else 0.0
-                st.metric("3. Flow Status", status_flow, delta=f"{pts_flow} / {RULE_PARAMS['weight_flow']} pts")
-                st.write(f"- Flow Score: {res['Flow_Score']} / 100")
-                st.write(f"- Target: ≥ {RULE_PARAMS['min_flow_score']}")
-
-            st.markdown("---")
-            c4, c5, c6 = st.columns(3)
-            with c4:
-                status_rs = "✅ PASS" if res["Pass_RS"] else "❌ FAIL"
-                pts_rs = RULE_PARAMS['weight_rs'] if res['Pass_RS'] else 0.0
-                st.metric("4. Rel Strength", status_rs, delta=f"{pts_rs} / {RULE_PARAMS['weight_rs']} pts")
-                st.write(f"- Alpha: {res['Alpha_Pct']:+.2f}%")
-                st.write(f"- Target Alpha: ≥ {RULE_PARAMS['min_alpha_pct']:.2f}%")
-
-            with c5:
-                status_vol = "✅ PASS" if res["Pass_VolExp"] else "❌ FAIL"
-                pts_vol = RULE_PARAMS['weight_vol_exp'] if res['Pass_VolExp'] else 0.0
-                st.metric("5. Volume Ratio", status_vol, delta=f"{pts_vol} / {RULE_PARAMS['weight_vol_exp']} pts")
-                st.write(f"- 5D/50D Ratio: {res['Vol_Ratio']:.2f}x")
-                st.write(f"- Min Target: ≥ {RULE_PARAMS['min_vol_ratio']:.2f}x")
-
-            with c6:
-                status_dd = "✅ PASS" if res["Pass_DD"] else "❌ FAIL"
-                pts_dd = RULE_PARAMS['weight_dd'] if res['Pass_DD'] else 0.0
-                st.metric("6. Max Drawdown", status_dd, delta=f"{pts_dd} / {RULE_PARAMS['weight_dd']} pts")
-                st.write(f"- 60D Drawdown: {res['Max_Drawdown']:.2f}%")
-                st.write(f"- Max Limit: ≤ {RULE_PARAMS['max_drawdown_pct']:.2f}%")
-
-            st.markdown("---")
-            c7, c8, c9 = st.columns(3)
-            with c7:
-                status_52w = "✅ PASS" if res["Pass_52W"] else "❌ FAIL"
-                pts_52w = RULE_PARAMS['weight_52w'] if res['Pass_52W'] else 0.0
-                st.metric("7. 52W Proximity", status_52w, delta=f"{pts_52w} / {RULE_PARAMS['weight_52w']} pts")
-                st.write(f"- Off 52W High: -{res['Dist_52W_High']:.2f}%")
-                st.write(f"- Limit: ≤ {RULE_PARAMS['max_dist_52w_pct']:.2f}%")
-
-            with c8:
-                status_rsi = "✅ PASS" if res["Pass_RSI"] else "❌ FAIL"
-                pts_rsi = RULE_PARAMS['weight_rsi'] if res['Pass_RSI'] else 0.0
-                st.metric("8. RSI Band", status_rsi, delta=f"{pts_rsi} / {RULE_PARAMS['weight_rsi']} pts")
-                st.write(f"- Current RSI: {res['RSI']:.1f}")
-                st.write(f"- Allowed Range: {RULE_PARAMS['min_rsi']} - {RULE_PARAMS['max_rsi']}")
-
-            with c9:
-                status_sharpe = "✅ PASS" if res["Pass_Sharpe"] else "❌ FAIL"
-                pts_sharpe = RULE_PARAMS['weight_sharpe'] if res['Pass_Sharpe'] else 0.0
-                st.metric("9. Sharpe Ratio", status_sharpe, delta=f"{pts_sharpe} / {RULE_PARAMS['weight_sharpe']} pts")
-                st.write(f"- Sharpe: {res['Sharpe']:.2f}")
-                st.write(f"- Min Target: ≥ {RULE_PARAMS['min_sharpe']:.2f}")
-
-            st.markdown("---")
-            c10, _ = st.columns([1, 2])
-            with c10:
-                status_atr = "✅ PASS" if res["Pass_ATR"] else "❌ FAIL"
-                pts_atr = RULE_PARAMS['weight_atr'] if res['Pass_ATR'] else 0.0
-                st.metric("10. ATR Volatility", status_atr, delta=f"{pts_atr} / {RULE_PARAMS['weight_atr']} pts")
-                st.write(f"- ATR %: {res['ATR_Pct']:.2f}%")
-                st.write(f"- Max Limit: ≤ {RULE_PARAMS['max_atr_pct']:.2f}%")
+        if not is_points_valid:
+            st.warning("⚠️ Adjust sidebar point sliders to equal exactly 100 points to view scorecard.")
         else:
-            st.error(f"Could not retrieve historical data for '{lookup_ticker}'.")
+            with st.spinner(f"Fetching and analyzing {lookup_ticker}..."):
+                df = fetch_etf_history(lookup_ticker)
+                res = evaluate_rules(df, benchmark_df, RULE_PARAMS)
+
+            if res:
+                st.markdown(f"### Composite Score for **{lookup_ticker}**: `{res['Score']} / 100` Points")
+
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    status_ma = "✅ PASS" if res["Pass_MA"] else "❌ FAIL"
+                    pts_ma = RULE_PARAMS['weight_ma'] if res['Pass_MA'] else 0
+                    st.metric("1. Trend Status", status_ma, delta=f"{pts_ma} / {RULE_PARAMS['weight_ma']} pts")
+                    st.write(f"- Fast EMA ({RULE_PARAMS['ema_fast']}D): ${res['Fast_EMA']:.2f}")
+                    st.write(f"- Slow EMA ({RULE_PARAMS['ema_slow']}D): ${res['Slow_EMA']:.2f}")
+
+                with c2:
+                    status_perf = "✅ PASS" if res["Pass_Perf"] else "❌ FAIL"
+                    pts_perf = RULE_PARAMS['weight_perf'] if res['Pass_Perf'] else 0
+                    st.metric("2. Return Status", status_perf, delta=f"{pts_perf} / {RULE_PARAMS['weight_perf']} pts")
+                    st.write(f"- Return: {res['Period_Return']:.2f}%")
+                    st.write(f"- Min Target: {RULE_PARAMS['min_return_pct']}%")
+
+                with c3:
+                    status_flow = "✅ PASS" if res["Pass_Flow"] else "❌ FAIL"
+                    pts_flow = RULE_PARAMS['weight_flow'] if res['Pass_Flow'] else 0
+                    st.metric("3. Flow Status", status_flow, delta=f"{pts_flow} / {RULE_PARAMS['weight_flow']} pts")
+                    st.write(f"- Flow Score: {res['Flow_Score']} / 100")
+                    st.write(f"- Target: ≥ {RULE_PARAMS['min_flow_score']}")
+
+                st.markdown("---")
+                c4, c5, c6 = st.columns(3)
+                with c4:
+                    status_rs = "✅ PASS" if res["Pass_RS"] else "❌ FAIL"
+                    pts_rs = RULE_PARAMS['weight_rs'] if res['Pass_RS'] else 0
+                    st.metric("4. Rel Strength", status_rs, delta=f"{pts_rs} / {RULE_PARAMS['weight_rs']} pts")
+                    st.write(f"- Alpha: {res['Alpha_Pct']:+.2f}%")
+                    st.write(f"- Target Alpha: ≥ {RULE_PARAMS['min_alpha_pct']:.2f}%")
+
+                with c5:
+                    status_vol = "✅ PASS" if res["Pass_VolExp"] else "❌ FAIL"
+                    pts_vol = RULE_PARAMS['weight_vol_exp'] if res['Pass_VolExp'] else 0
+                    st.metric("5. Volume Ratio", status_vol, delta=f"{pts_vol} / {RULE_PARAMS['weight_vol_exp']} pts")
+                    st.write(f"- 5D/50D Ratio: {res['Vol_Ratio']:.2f}x")
+                    st.write(f"- Min Target: ≥ {RULE_PARAMS['min_vol_ratio']:.2f}x")
+
+                with c6:
+                    status_dd = "✅ PASS" if res["Pass_DD"] else "❌ FAIL"
+                    pts_dd = RULE_PARAMS['weight_dd'] if res['Pass_DD'] else 0
+                    st.metric("6. Max Drawdown", status_dd, delta=f"{pts_dd} / {RULE_PARAMS['weight_dd']} pts")
+                    st.write(f"- 60D Drawdown: {res['Max_Drawdown']:.2f}%")
+                    st.write(f"- Max Limit: ≤ {RULE_PARAMS['max_drawdown_pct']:.2f}%")
+
+                st.markdown("---")
+                c7, c8, c9 = st.columns(3)
+                with c7:
+                    status_52w = "✅ PASS" if res["Pass_52W"] else "❌ FAIL"
+                    pts_52w = RULE_PARAMS['weight_52w'] if res['Pass_52W'] else 0
+                    st.metric("7. 52W Proximity", status_52w, delta=f"{pts_52w} / {RULE_PARAMS['weight_52w']} pts")
+                    st.write(f"- Off 52W High: -{res['Dist_52W_High']:.2f}%")
+                    st.write(f"- Limit: ≤ {RULE_PARAMS['max_dist_52w_pct']:.2f}%")
+
+                with c8:
+                    status_rsi = "✅ PASS" if res["Pass_RSI"] else "❌ FAIL"
+                    pts_rsi = RULE_PARAMS['weight_rsi'] if res['Pass_RSI'] else 0
+                    st.metric("8. RSI Band", status_rsi, delta=f"{pts_rsi} / {RULE_PARAMS['weight_rsi']} pts")
+                    st.write(f"- Current RSI: {res['RSI']:.1f}")
+                    st.write(f"- Allowed Range: {RULE_PARAMS['min_rsi']} - {RULE_PARAMS['max_rsi']}")
+
+                with c9:
+                    status_sharpe = "✅ PASS" if res["Pass_Sharpe"] else "❌ FAIL"
+                    pts_sharpe = RULE_PARAMS['weight_sharpe'] if res['Pass_Sharpe'] else 0
+                    st.metric("9. Sharpe Ratio", status_sharpe, delta=f"{pts_sharpe} / {RULE_PARAMS['weight_sharpe']} pts")
+                    st.write(f"- Sharpe: {res['Sharpe']:.2f}")
+                    st.write(f"- Min Target: ≥ {RULE_PARAMS['min_sharpe']:.2f}")
+
+                st.markdown("---")
+                c10, _ = st.columns([1, 2])
+                with c10:
+                    status_atr = "✅ PASS" if res["Pass_ATR"] else "❌ FAIL"
+                    pts_atr = RULE_PARAMS['weight_atr'] if res['Pass_ATR'] else 0
+                    st.metric("10. ATR Volatility", status_atr, delta=f"{pts_atr} / {RULE_PARAMS['weight_atr']} pts")
+                    st.write(f"- ATR %: {res['ATR_Pct']:.2f}%")
+                    st.write(f"- Max Limit: ≤ {RULE_PARAMS['max_atr_pct']:.2f}%")
+            else:
+                st.error(f"Could not retrieve historical data for '{lookup_ticker}'.")
