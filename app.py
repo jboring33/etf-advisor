@@ -6,7 +6,7 @@ Features:
 - Streamlined 3-column Points Configurator [Rule #, Rule Name, My Weight].
 - Fixed Weekly Snapshot engine ensuring accurate 'vs Prior Run' comparison.
 - Plain integer formatting for Total Score in Batch Screener.
-- Detailed metric breakdown & quantitative commentary restored in Single Symbol Scorecard.
+- Detailed metric breakdown, quantitative values, rule rationale/importance, and target threshold ranges in Single Symbol Scorecard.
 """
 
 import os
@@ -359,7 +359,8 @@ with tab_screen:
     )
 
     st.session_state["user_tickers"] = user_input
-    tickers_list = [t.strip().upper() for t in user_input.replace("\n", ",").split(",") if t.strip()]
+    tickers_list = [t.strip().upper() for t in user_input.replace("
+", ",").split(",") if t.strip()]
 
     if st.button("Run Universe Screen", type="primary", disabled=not is_points_valid):
         results = []
@@ -462,19 +463,25 @@ with tab_single:
                     status_ma = "✅ PASS" if res["Pass_MA"] else "❌ FAIL"
                     pts_ma = RULE_PARAMS['weight_ma'] if res['Pass_MA'] else 0
                     st.metric("1. Trend Status", status_ma, delta=f"{pts_ma} / {RULE_PARAMS['weight_ma']} pts")
-                    st.caption(f"ℹ️ {res['Val_MA']}")
+                    st.caption(f"**Current Value:** {res['Val_MA']}")
+                    st.caption(f"**Target Range:** EMA20 > EMA50")
+                    st.caption("**Why It Matters:** Establishes core directional trend bias and prevents buying into prolonged downtrends.")
 
                 with c2:
                     status_perf = "✅ PASS" if res["Pass_Perf"] else "❌ FAIL"
                     pts_perf = RULE_PARAMS['weight_perf'] if res['Pass_Perf'] else 0
                     st.metric("2. Return Status", status_perf, delta=f"{pts_perf} / {RULE_PARAMS['weight_perf']} pts")
-                    st.caption(f"ℹ️ {res['Val_Perf']}")
+                    st.caption(f"**Current Value:** {res['Val_Perf']}")
+                    st.caption(f"**Target Range:** ≥ {RULE_PARAMS['min_return_pct']:.1f}% over {RULE_PARAMS['perf_days']} days")
+                    st.caption("**Why It Matters:** Confirms baseline medium-term price appreciation and absolute momentum.")
 
                 with c3:
                     status_flow = "✅ PASS" if res["Pass_Flow"] else "❌ FAIL"
                     pts_flow = RULE_PARAMS['weight_flow'] if res['Pass_Flow'] else 0
                     st.metric("3. Flow Status", status_flow, delta=f"{pts_flow} / {RULE_PARAMS['weight_flow']} pts")
-                    st.caption(f"ℹ️ {res['Val_Flow']}")
+                    st.caption(f"**Current Value:** {res['Val_Flow']}")
+                    st.caption(f"**Target Range:** Flow Score ≥ {RULE_PARAMS['min_flow_score']:.0f} (Range: 0-100)")
+                    st.caption("**Why It Matters:** Measures underlying institutional accumulation vs distribution volume patterns.")
 
                 st.markdown("---")
                 c4, c5, c6 = st.columns(3)
@@ -482,19 +489,25 @@ with tab_single:
                     status_rs = "✅ PASS" if res["Pass_RS"] else "❌ FAIL"
                     pts_rs = RULE_PARAMS['weight_rs'] if res['Pass_RS'] else 0
                     st.metric("4. Rel Strength", status_rs, delta=f"{pts_rs} / {RULE_PARAMS['weight_rs']} pts")
-                    st.caption(f"ℹ️ {res['Val_RS']}")
+                    st.caption(f"**Current Value:** {res['Val_RS']}")
+                    st.caption(f"**Target Range:** Alpha vs SPY ≥ {RULE_PARAMS['min_alpha_pct']:.1f}%")
+                    st.caption("**Why It Matters:** Identifies sector/factor leaders that consistently beat the broader market index.")
 
                 with c5:
                     status_vol = "✅ PASS" if res["Pass_VolExp"] else "❌ FAIL"
                     pts_vol = RULE_PARAMS['weight_vol_exp'] if res['Pass_VolExp'] else 0
                     st.metric("5. Volume Ratio", status_vol, delta=f"{pts_vol} / {RULE_PARAMS['weight_vol_exp']} pts")
-                    st.caption(f"ℹ️ {res['Val_VolExp']}")
+                    st.caption(f"**Current Value:** {res['Val_VolExp']}")
+                    st.caption(f"**Target Range:** 5D/50D Volume Ratio ≥ {RULE_PARAMS['min_vol_ratio']:.2f}x")
+                    st.caption("**Why It Matters:** Highlights fresh institutional buyer participation and surging liquidity interest.")
 
                 with c6:
                     status_dd = "✅ PASS" if res["Pass_DD"] else "❌ FAIL"
                     pts_dd = RULE_PARAMS['weight_dd'] if res['Pass_DD'] else 0
                     st.metric("6. Max Drawdown", status_dd, delta=f"{pts_dd} / {RULE_PARAMS['weight_dd']} pts")
-                    st.caption(f"ℹ️ {res['Val_DD']}")
+                    st.caption(f"**Current Value:** {res['Val_DD']}")
+                    st.caption(f"**Target Range:** 60-Day Trailing Drawdown ≤ {RULE_PARAMS['max_drawdown_pct']:.1f}%")
+                    st.caption("**Why It Matters:** Filters out unstable or high-risk assets undergoing severe structural pullbacks.")
 
                 st.markdown("---")
                 c7, c8, c9 = st.columns(3)
@@ -502,19 +515,25 @@ with tab_single:
                     status_52w = "✅ PASS" if res["Pass_52W"] else "❌ FAIL"
                     pts_52w = RULE_PARAMS['weight_52w'] if res['Pass_52W'] else 0
                     st.metric("7. 52W Proximity", status_52w, delta=f"{pts_52w} / {RULE_PARAMS['weight_52w']} pts")
-                    st.caption(f"ℹ️ {res['Val_52W']}")
+                    st.caption(f"**Current Value:** {res['Val_52W']}")
+                    st.caption(f"**Target Range:** Distance to High ≤ {RULE_PARAMS['max_dist_52w_pct']:.1f}%")
+                    st.caption("**Why It Matters:** Focuses capital on ETFs trading near structural high-water marks (breakout setup).")
 
                 with c8:
                     status_rsi = "✅ PASS" if res["Pass_RSI"] else "❌ FAIL"
                     pts_rsi = RULE_PARAMS['weight_rsi'] if res['Pass_RSI'] else 0
                     st.metric("8. RSI Band", status_rsi, delta=f"{pts_rsi} / {RULE_PARAMS['weight_rsi']} pts")
-                    st.caption(f"ℹ️ {res['Val_RSI']}")
+                    st.caption(f"**Current Value:** {res['Val_RSI']}")
+                    st.caption(f"**Target Range:** 14-Day RSI between {RULE_PARAMS['min_rsi']:.0f} and {RULE_PARAMS['max_rsi']:.0f}")
+                    st.caption("**Why It Matters:** Confirms healthy bullish momentum while avoiding severely overbought exhaustion.")
 
                 with c9:
                     status_sharpe = "✅ PASS" if res["Pass_Sharpe"] else "❌ FAIL"
                     pts_sharpe = RULE_PARAMS['weight_sharpe'] if res['Pass_Sharpe'] else 0
                     st.metric("9. Sharpe Ratio", status_sharpe, delta=f"{pts_sharpe} / {RULE_PARAMS['weight_sharpe']} pts")
-                    st.caption(f"ℹ️ {res['Val_Sharpe']}")
+                    st.caption(f"**Current Value:** {res['Val_Sharpe']}")
+                    st.caption(f"**Target Range:** Annualized Sharpe Ratio ≥ {RULE_PARAMS['min_sharpe']:.2f}")
+                    st.caption("**Why It Matters:** Evaluates risk-adjusted performance efficiency per unit of total volatility.")
 
                 st.markdown("---")
                 c10, _ = st.columns([1, 2])
@@ -522,7 +541,9 @@ with tab_single:
                     status_atr = "✅ PASS" if res["Pass_ATR"] else "❌ FAIL"
                     pts_atr = RULE_PARAMS['weight_atr'] if res['Pass_ATR'] else 0
                     st.metric("10. ATR Volatility", status_atr, delta=f"{pts_atr} / {RULE_PARAMS['weight_atr']} pts")
-                    st.caption(f"ℹ️ {res['Val_ATR']}")
+                    st.caption(f"**Current Value:** {res['Val_ATR']}")
+                    st.caption(f"**Target Range:** 14-Day ATR % ≤ {RULE_PARAMS['max_atr_pct']:.2f}%")
+                    st.caption("**Why It Matters:** Identifies low-volatility consolidation squeezes prior to explosive moves.")
             else:
                 st.error(f"Could not retrieve historical data for '{lookup_ticker}'.")
 
