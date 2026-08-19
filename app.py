@@ -1,3 +1,4 @@
+"""
 app.py
 ======
 Modular ETF Rule Configurator & Scoring Engine (10 Rules)
@@ -286,7 +287,7 @@ st.title("🎯 Custom ETF Screener & Scoring Engine")
 
 benchmark_df = fetch_etf_history("SPY")
 
-# Navigation Tabs (Historical tracker UI removed, functionality preserved under hood)
+# Navigation Tabs
 tab_config, tab_screen, tab_single = st.tabs([
     "⚙️ Points Configurator",
     "📊 Batch Universe Screener",
@@ -394,7 +395,6 @@ with tab_screen:
         progress_bar.empty()
 
         if results:
-            # Under-the-hood snapshot saving and comparison
             save_run_snapshot(results)
             prior_run = get_previous_run_data()
 
@@ -457,7 +457,6 @@ with tab_single:
                     delta=delta_str
                 )
 
-                # Metrics with specific quantitative commentary
                 st.markdown("---")
                 c1, c2, c3 = st.columns(3)
                 with c1:
