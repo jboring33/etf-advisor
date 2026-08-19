@@ -3,8 +3,8 @@ app.py
 Modular ETF Rule Configurator & Scoring Engine (10 Rules)
 Features:
 - Streamlined 3-column Points Configurator [Rule #, Rule Name, My Weight].
-- Automated Weekly Snapshot saving & historical comparison engine.
 - Delta tracking (+/- pts) in Batch Universe Screener & Single Symbol Scorecard.
+- Historical snapshots saved quietly under the hood to calculate run comparisons.
 """
 
 import os
@@ -58,7 +58,7 @@ if "config_df_v2" not in st.session_state:
     ])
 
 def save_run_snapshot(results: list):
-    """Saves or updates today's run snapshot in local storage."""
+    """Saves or updates today's run snapshot quietly in local storage."""
     today_str = datetime.now().strftime("%Y-%m-%d")
     records = []
     for r in results:
@@ -71,11 +71,13 @@ def save_run_snapshot(results: list):
     
     new_df = pd.DataFrame(records)
     if os.path.exists(SNAPSHOT_FILE):
-        existing_df = pd.read_csv(SNAPSHOT_FILE)
-        # Replace existing entry for today if run multiple times on same date
-        existing_df = existing_df[existing_df["Run_Date"] != today_str]
-        combined_df = pd.concat([existing_df, new_df], ignore_index=True)
-        combined_df.to_csv(SNAPSHOT_FILE, index=False)
+        try:
+            existing_df = pd.read_csv(SNAPSHOT_FILE)
+            existing_df = existing_df[existing_df["Run_Date"] != today_str]
+            combined_df = pd.concat([existing_df, new_df], ignore_index=True)
+            combined_df.to_csv(SNAPSHOT_FILE, index=False)
+        except Exception:
+            new_df.to_csv(SNAPSHOT_FILE, index=False)
     else:
         new_df.to_csv(SNAPSHOT_FILE, index=False)
 
@@ -84,15 +86,18 @@ def get_previous_run_data() -> pd.DataFrame:
     if not os.path.exists(SNAPSHOT_FILE):
         return pd.DataFrame()
     
-    df = pd.read_csv(SNAPSHOT_FILE)
-    today_str = datetime.now().strftime("%Y-%m-%d")
-    prior_df = df[df["Run_Date"] != today_str]
-    
-    if prior_df.empty:
+    try:
+        df = pd.read_csv(SNAPSHOT_FILE)
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        prior_df = df[df["Run_Date"] != today_str]
+        
+        if prior_df.empty:
+            return pd.DataFrame()
+        
+        latest_prior_date = prior_df["Run_Date"].max()
+        return prior_df[prior_df["Run_Date"] == latest_prior_date].set_index("Ticker")
+    except Exception:
         return pd.DataFrame()
-    
-    latest_prior_date = prior_df["Run_Date"].max()
-    return prior_df[prior_df["Run_Date"] == latest_prior_date].set_index("Ticker")
 
 
 # ==============================================================================
@@ -101,7 +106,7 @@ def get_previous_run_data() -> pd.DataFrame:
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_etf_history(ticker: str) -> pd.DataFrame:
-    """Fetches 1 year of daily price history using yfinance."""
+    """Fetches 1 year of daily price history safely using yfinance."""
     ticker_clean = ticker.strip().upper()
     try:
         df = yf.download(
@@ -112,9 +117,9 @@ def fetch_etf_history(ticker: str) -> pd.DataFrame:
             threads=False,
             ignore_tz=True
         )
-        if not df.empty:
+        if df is not None and not df.empty:
             if isinstance(df.columns, pd.MultiIndex):
-                df.columns = [col[0] for col in df.columns]
+                df.columns = df.columns.get_level_values(0)
             df = df.loc[:, ~df.columns.duplicated()]
             if "Close" in df.columns and len(df) > 30:
                 return df.dropna(subset=["Close"]).reset_index()
@@ -133,7 +138,8 @@ def calculate_rsi(series: pd.Series, period: int = 14) -> float:
     loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
     rs = gain / loss.replace(0, np.nan)
     rsi = 100 - (100 / (1 + rs))
-    return float(rsi.iloc[-1]) if not rsi.empty and not pd.isna(rsi.iloc[-1]) else 50.0
+    val = rsi.iloc[-1] if not rsi.empty else 50.0
+    return float(val) if not pd.isna(val) else 50.0
 
 def calculate_atr_ratio(df: pd.DataFrame, period: int = 14) -> float:
     if len(df) < period + 1 or "High" not in df.columns or "Low" not in df.columns:
@@ -160,13 +166,17 @@ def evaluate_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
     ema_fast = close.ewm(span=params["ema_fast"], adjust=False).mean()
     ema_slow = close.ewm(span=params["ema_slow"], adjust=False).mean()
     latest_close = float(close.iloc[-1])
-    rule_ma_passed = float(ema_fast.iloc[-1]) > float(ema_slow.iloc[-1])
+    fast_val = float(ema_fast.iloc[-1])
+    slow_val = float(ema_slow.iloc[-1])
+    rule_ma_passed = fast_val > slow_val
+    comm_ma = f"20 EMA (${fast_val:.2f}) > 50 EMA (${slow_val:.2f})" if rule_ma_passed else f"20 EMA (${fast_val:.2f}) ≤ 50 EMA (${slow_val:.2f})"
 
     # 2. Performance
     lookback_days = min(params["perf_days"], len(close) - 1)
     past_close = float(close.iloc[-lookback_days])
     period_return_pct = ((latest_close - past_close) / past_close) * 100
     rule_perf_passed = period_return_pct >= params["min_return_pct"]
+    comm_perf = f"{lookback_days}d Return: {period_return_pct:+.2f}% (Min: {params['min_return_pct']}%)"
 
     # 3. Flow
     hist_vol = volume.tail(22)
@@ -177,6 +187,7 @@ def evaluate_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
     avg_vol = hist_vol.mean()
     flow_score = 50 if avg_vol == 0 else int(min(100, max(0, 50 + (net_vol / (avg_vol * 10)) * 50)))
     rule_flow_passed = flow_score >= params["min_flow_score"]
+    comm_flow = f"Flow Index: {flow_score}/100 (Min: {params['min_flow_score']})"
 
     # 4. Relative Strength
     alpha_pct = 0.0
@@ -188,6 +199,7 @@ def evaluate_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
         bench_return = ((bench_latest - bench_past) / bench_past) * 100
         alpha_pct = period_return_pct - bench_return
         rule_rs_passed = alpha_pct >= params["min_alpha_pct"]
+    comm_rs = f"Alpha vs SPY: {alpha_pct:+.2f}% (Min: {params['min_alpha_pct']}%)"
 
     # 5. Vol Exp
     vol_ratio = 1.0
@@ -197,6 +209,7 @@ def evaluate_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
         vol_50d = volume.tail(50).mean()
         vol_ratio = (vol_5d / vol_50d) if vol_50d > 0 else 1.0
         rule_vol_exp_passed = vol_ratio >= params["min_vol_ratio"]
+    comm_vol = f"5d/50d Vol Ratio: {vol_ratio:.2f}x (Min: {params['min_vol_ratio']}x)"
 
     # 6. Drawdown
     max_dd_pct = 0.0
@@ -207,6 +220,7 @@ def evaluate_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
         drawdown = (tail_60 - rolling_max) / rolling_max
         max_dd_pct = abs(float(drawdown.min())) * 100
         rule_dd_passed = max_dd_pct <= params["max_drawdown_pct"]
+    comm_dd = f"60d Max Drawdown: {max_dd_pct:.2f}% (Max Limit: {params['max_drawdown_pct']}%)"
 
     # 7. 52W High
     dist_52w_high_pct = 0.0
@@ -215,10 +229,12 @@ def evaluate_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
         high_52w = float(close.tail(252).max()) if len(close) >= 252 else float(close.max())
         dist_52w_high_pct = ((high_52w - latest_close) / high_52w) * 100
         rule_52w_passed = dist_52w_high_pct <= params["max_dist_52w_pct"]
+    comm_52w = f"Dist from 52W High: {dist_52w_high_pct:.2f}% (Max: {params['max_dist_52w_pct']}%)"
 
     # 8. RSI
     rsi_val = calculate_rsi(close, period=14)
     rule_rsi_passed = (rsi_val >= params["min_rsi"]) and (rsi_val <= params["max_rsi"])
+    comm_rsi = f"14d RSI: {rsi_val:.1f} (Target Band: {params['min_rsi']}-{params['max_rsi']})"
 
     # 9. Sharpe
     daily_returns = close.pct_change().dropna()
@@ -226,10 +242,12 @@ def evaluate_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
     ann_std = daily_returns.std() * np.sqrt(252)
     sharpe_ratio = (ann_return / ann_std) if ann_std > 0 else 0.0
     rule_sharpe_passed = sharpe_ratio >= params["min_sharpe"]
+    comm_sharpe = f"Ann. Sharpe Ratio: {sharpe_ratio:.2f} (Min: {params['min_sharpe']})"
 
     # 10. ATR
     atr_pct = calculate_atr_ratio(df, period=14)
     rule_atr_passed = atr_pct <= params["max_atr_pct"]
+    comm_atr = f"ATR % of Price: {atr_pct:.2f}% (Max: {params['max_atr_pct']}%)"
 
     # Calculate Total
     total_score = 0
@@ -247,16 +265,16 @@ def evaluate_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
     return {
         "Score": total_score,
         "Close": latest_close,
-        "Pass_MA": rule_ma_passed,
-        "Pass_Perf": rule_perf_passed,
-        "Pass_Flow": rule_flow_passed,
-        "Pass_RS": rule_rs_passed,
-        "Pass_VolExp": rule_vol_exp_passed,
-        "Pass_DD": rule_dd_passed,
-        "Pass_52W": rule_52w_passed,
-        "Pass_RSI": rule_rsi_passed,
-        "Pass_Sharpe": rule_sharpe_passed,
-        "Pass_ATR": rule_atr_passed
+        "Pass_MA": rule_ma_passed, "Comm_MA": comm_ma,
+        "Pass_Perf": rule_perf_passed, "Comm_Perf": comm_perf,
+        "Pass_Flow": rule_flow_passed, "Comm_Flow": comm_flow,
+        "Pass_RS": rule_rs_passed, "Comm_RS": comm_rs,
+        "Pass_VolExp": rule_vol_exp_passed, "Comm_VolExp": comm_vol,
+        "Pass_DD": rule_dd_passed, "Comm_DD": comm_dd,
+        "Pass_52W": rule_52w_passed, "Comm_52W": comm_52w,
+        "Pass_RSI": rule_rsi_passed, "Comm_RSI": comm_rsi,
+        "Pass_Sharpe": rule_sharpe_passed, "Comm_Sharpe": comm_sharpe,
+        "Pass_ATR": rule_atr_passed, "Comm_ATR": comm_atr
     }
 
 
@@ -268,7 +286,7 @@ st.title("🎯 Custom ETF Screener & Scoring Engine")
 
 benchmark_df = fetch_etf_history("SPY")
 
-# Navigation Tabs
+# Navigation Tabs (Historical tracker UI removed, functionality preserved under hood)
 tab_config, tab_screen, tab_single = st.tabs([
     "⚙️ Points Configurator",
     "📊 Batch Universe Screener",
@@ -353,7 +371,7 @@ with tab_screen:
             df = fetch_etf_history(ticker)
             eval_res = evaluate_rules(df, benchmark_df, RULE_PARAMS)
             
-            if eval_res:
+            if eval_res is not None:
                 results.append({
                     "Ticker": ticker,
                     "Total Score": eval_res["Score"],
@@ -376,11 +394,10 @@ with tab_screen:
         progress_bar.empty()
 
         if results:
-            # Save run snapshot
+            # Under-the-hood snapshot saving and comparison
             save_run_snapshot(results)
             prior_run = get_previous_run_data()
 
-            # Merge Weekly Delta
             res_df = pd.DataFrame(results)
             changes = []
             for _, row in res_df.iterrows():
@@ -407,7 +424,7 @@ with tab_screen:
                 use_container_width=True
             )
         else:
-            st.warning("Could not retrieve data for any of the provided tickers.")
+            st.warning("Could not retrieve valid historical data for any provided tickers.")
 
 
 # ==============================================================================
@@ -426,7 +443,7 @@ with tab_single:
                 df = fetch_etf_history(lookup_ticker)
                 res = evaluate_rules(df, benchmark_df, RULE_PARAMS)
 
-            if res:
+            if res is not None:
                 prior_run = get_previous_run_data()
                 delta_str = None
                 if not prior_run.empty and lookup_ticker in prior_run.index:
@@ -440,22 +457,26 @@ with tab_single:
                     delta=delta_str
                 )
 
+                # Metrics with specific quantitative commentary
                 st.markdown("---")
                 c1, c2, c3 = st.columns(3)
                 with c1:
                     status_ma = "✅ PASS" if res["Pass_MA"] else "❌ FAIL"
                     pts_ma = RULE_PARAMS['weight_ma'] if res['Pass_MA'] else 0
                     st.metric("1. Trend Status", status_ma, delta=f"{pts_ma} / {RULE_PARAMS['weight_ma']} pts")
+                    st.caption(res["Comm_MA"])
 
                 with c2:
                     status_perf = "✅ PASS" if res["Pass_Perf"] else "❌ FAIL"
                     pts_perf = RULE_PARAMS['weight_perf'] if res['Pass_Perf'] else 0
                     st.metric("2. Return Status", status_perf, delta=f"{pts_perf} / {RULE_PARAMS['weight_perf']} pts")
+                    st.caption(res["Comm_Perf"])
 
                 with c3:
                     status_flow = "✅ PASS" if res["Pass_Flow"] else "❌ FAIL"
                     pts_flow = RULE_PARAMS['weight_flow'] if res['Pass_Flow'] else 0
                     st.metric("3. Flow Status", status_flow, delta=f"{pts_flow} / {RULE_PARAMS['weight_flow']} pts")
+                    st.caption(res["Comm_Flow"])
 
                 st.markdown("---")
                 c4, c5, c6 = st.columns(3)
@@ -463,16 +484,19 @@ with tab_single:
                     status_rs = "✅ PASS" if res["Pass_RS"] else "❌ FAIL"
                     pts_rs = RULE_PARAMS['weight_rs'] if res['Pass_RS'] else 0
                     st.metric("4. Rel Strength", status_rs, delta=f"{pts_rs} / {RULE_PARAMS['weight_rs']} pts")
+                    st.caption(res["Comm_RS"])
 
                 with c5:
                     status_vol = "✅ PASS" if res["Pass_VolExp"] else "❌ FAIL"
                     pts_vol = RULE_PARAMS['weight_vol_exp'] if res['Pass_VolExp'] else 0
                     st.metric("5. Volume Ratio", status_vol, delta=f"{pts_vol} / {RULE_PARAMS['weight_vol_exp']} pts")
+                    st.caption(res["Comm_VolExp"])
 
                 with c6:
                     status_dd = "✅ PASS" if res["Pass_DD"] else "❌ FAIL"
                     pts_dd = RULE_PARAMS['weight_dd'] if res['Pass_DD'] else 0
                     st.metric("6. Max Drawdown", status_dd, delta=f"{pts_dd} / {RULE_PARAMS['weight_dd']} pts")
+                    st.caption(res["Comm_DD"])
 
                 st.markdown("---")
                 c7, c8, c9 = st.columns(3)
@@ -480,16 +504,19 @@ with tab_single:
                     status_52w = "✅ PASS" if res["Pass_52W"] else "❌ FAIL"
                     pts_52w = RULE_PARAMS['weight_52w'] if res['Pass_52W'] else 0
                     st.metric("7. 52W Proximity", status_52w, delta=f"{pts_52w} / {RULE_PARAMS['weight_52w']} pts")
+                    st.caption(res["Comm_52W"])
 
                 with c8:
                     status_rsi = "✅ PASS" if res["Pass_RSI"] else "❌ FAIL"
                     pts_rsi = RULE_PARAMS['weight_rsi'] if res['Pass_RSI'] else 0
                     st.metric("8. RSI Band", status_rsi, delta=f"{pts_rsi} / {RULE_PARAMS['weight_rsi']} pts")
+                    st.caption(res["Comm_RSI"])
 
                 with c9:
                     status_sharpe = "✅ PASS" if res["Pass_Sharpe"] else "❌ FAIL"
                     pts_sharpe = RULE_PARAMS['weight_sharpe'] if res['Pass_Sharpe'] else 0
                     st.metric("9. Sharpe Ratio", status_sharpe, delta=f"{pts_sharpe} / {RULE_PARAMS['weight_sharpe']} pts")
+                    st.caption(res["Comm_Sharpe"])
 
                 st.markdown("---")
                 c10, _ = st.columns([1, 2])
@@ -497,5 +524,6 @@ with tab_single:
                     status_atr = "✅ PASS" if res["Pass_ATR"] else "❌ FAIL"
                     pts_atr = RULE_PARAMS['weight_atr'] if res['Pass_ATR'] else 0
                     st.metric("10. ATR Volatility", status_atr, delta=f"{pts_atr} / {RULE_PARAMS['weight_atr']} pts")
+                    st.caption(res["Comm_ATR"])
             else:
-                st.error(f"Could not retrieve historical data for '{lookup_ticker}'.")
+                st.error(f"Could not retrieve sufficient historical data for '{lookup_ticker}'.")
