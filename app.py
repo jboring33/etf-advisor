@@ -3,10 +3,9 @@ app.py
 ======
 Modular ETF Rule Configurator & Scoring Engine
 Features:
-- 7 Fine-Tuning Rules: EMA Trend, Absolute Return, Money Flow, Relative Strength (SPY), 
-  Volume Expansion, Trailing Drawdown, and 52-Week High Proximity.
-- Batch Screener for custom universes.
-- Single Symbol Scorecard with detailed educational & scoring commentary.
+- Persistent ticker watchlists across app reruns and tab navigation using st.session_state.
+- Adjustable weights (points allocated) and parameters for all 7 rules.
+- Educational commentary explaining scoring logic and investment theses in Single Symbol view.
 """
 
 import streamlit as st
@@ -32,6 +31,14 @@ st.markdown("""
     }
 </style>
 """, unsafe_allow_html=True)
+
+
+# ==============================================================================
+# SESSION STATE INITIALIZATION (PERSISTENT TICKERS)
+# ==============================================================================
+
+if "user_tickers" not in st.session_state:
+    st.session_state["user_tickers"] = "VFLO, SCHD, SCYB, JPST, JAAA, VEA, DIVI, EMXC, SMH, XLK, QQQ, SPY"
 
 
 # ==============================================================================
@@ -67,7 +74,7 @@ def fetch_etf_history(ticker: str) -> pd.DataFrame:
 # ==============================================================================
 
 def evaluate_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
-    """Evaluates 7 total technical, performance, volume, and volatility rules."""
+    """Evaluates 7 technical, performance, volume, and volatility rules."""
     if df.empty or len(df) < params["ema_slow"]:
         return None
 
@@ -173,43 +180,42 @@ def evaluate_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
 
 
 # ==============================================================================
-# SIDEBAR: RULE & PARAMETER CONFIGURATION
+# SIDEBAR: RULE PARAMETERS & SCORE WEIGHT CONFIGURATION
 # ==============================================================================
 
-st.sidebar.header("⚙️ Rule Configuration")
-st.sidebar.caption("Adjust thresholds to customize scoring logic.")
+st.sidebar.header("⚙️ Rule & Weight Configurator")
+st.sidebar.caption("Set parameters and adjust the point values (weights) assigned to each rule.")
 
 st.sidebar.subheader("1. Trend Rule (EMA)")
 ema_fast_val = st.sidebar.number_input("Fast EMA Span (Days)", value=20, step=5)
 ema_slow_val = st.sidebar.number_input("Slow EMA Span (Days)", value=50, step=5)
-weight_ma_val = st.sidebar.slider("Trend Rule Weight (pts)", 0, 50, 20)
+weight_ma_val = st.sidebar.slider("Trend Rule Weight (pts)", 0, 100, 20)
 
 st.sidebar.subheader("2. Absolute Return")
 perf_days_val = st.sidebar.number_input("Lookback Window (Days)", value=60, step=10)
 min_return_val = st.sidebar.number_input("Min Required Return (%)", value=2.0, step=0.5)
-weight_perf_val = st.sidebar.slider("Performance Weight (pts)", 0, 50, 15)
+weight_perf_val = st.sidebar.slider("Performance Weight (pts)", 0, 100, 15)
 
 st.sidebar.subheader("3. Money Flow Rule")
 min_flow_val = st.sidebar.slider("Min Money Flow Score", 0, 100, 50)
-weight_flow_val = st.sidebar.slider("Money Flow Weight (pts)", 0, 50, 15)
+weight_flow_val = st.sidebar.slider("Money Flow Weight (pts)", 0, 100, 15)
 
 st.sidebar.subheader("4. Relative Strength vs SPY")
 min_alpha_val = st.sidebar.number_input("Min Excess Alpha vs SPY (%)", value=1.0, step=0.5)
-weight_rs_val = st.sidebar.slider("Relative Strength Weight (pts)", 0, 50, 15)
+weight_rs_val = st.sidebar.slider("Relative Strength Weight (pts)", 0, 100, 15)
 
 st.sidebar.subheader("5. Volume Expansion")
 min_vol_ratio_val = st.sidebar.number_input("Min Volume Ratio (5D/50D)", value=1.1, step=0.1)
-weight_vol_exp_val = st.sidebar.slider("Volume Expansion Weight (pts)", 0, 50, 10)
+weight_vol_exp_val = st.sidebar.slider("Volume Expansion Weight (pts)", 0, 100, 10)
 
 st.sidebar.subheader("6. Trailing Max Drawdown Filter")
 max_dd_val = st.sidebar.number_input("Max Allowed Drawdown (%)", value=10.0, step=1.0)
-weight_dd_val = st.sidebar.slider("Drawdown Weight (pts)", 0, 50, 15)
+weight_dd_val = st.sidebar.slider("Drawdown Weight (pts)", 0, 100, 15)
 
 st.sidebar.subheader("7. Proximity to 52-Week High")
 max_dist_52w_val = st.sidebar.number_input("Max % Distance from High", value=8.0, step=1.0)
-weight_52w_val = st.sidebar.slider("52-Wk High Weight (pts)", 0, 50, 10)
+weight_52w_val = st.sidebar.slider("52-Wk High Weight (pts)", 0, 100, 10)
 
-# Consolidated Rules Parameters Dictionary
 RULE_PARAMS = {
     "ema_fast": ema_fast_val,
     "ema_slow": ema_slow_val,
@@ -257,16 +263,19 @@ with tab_screen:
     st.header("Custom Universe Screening")
     st.caption("Enter your list of ETFs to evaluate them against your active sidebar rules.")
 
-    default_tickers = "VFLO, SCHD, SCYB, JPST, JAAA, VEA, DIVI, EMXC, SMH, XLK, QQQ, SPY"
     user_input = st.text_area(
         "Enter ETF Tickers (comma or space separated):",
-        value=default_tickers,
-        height=100
+        value=st.session_state["user_tickers"],
+        height=100,
+        key="ticker_input_field"
     )
+
+    # Keep session state synced with user edits
+    st.session_state["user_tickers"] = user_input
 
     tickers_list = [t.strip().upper() for t in user_input.replace("\n", ",").split(",") if t.strip()]
 
-    min_total_score = st.slider("Minimum Composite Score Filter:", 0, MAX_POSSIBLE_SCORE, int(MAX_POSSIBLE_SCORE * 0.5))
+    min_total_score = st.slider("Minimum Composite Score Filter:", 0, max(1, MAX_POSSIBLE_SCORE), int(MAX_POSSIBLE_SCORE * 0.5))
 
     if st.button("Run Universe Screen", type="primary"):
         results = []
@@ -346,7 +355,7 @@ with tab_single:
                 
                 st.info(
                     "**Why it matters:** Fast EMAs staying above Slow EMAs confirms a sustained, structural uptrend.\n\n"
-                    f"**Scoring Logic:** Received **{pts_ma} pts** because the {RULE_PARAMS['ema_fast']}-day EMA standard "
+                    f"**Scoring Logic:** Received **{pts_ma} / {RULE_PARAMS['weight_ma']} pts** because the {RULE_PARAMS['ema_fast']}-day EMA "
                     f"is {'above' if res['Pass_MA'] else 'below'} the {RULE_PARAMS['ema_slow']}-day EMA."
                 )
 
@@ -361,7 +370,7 @@ with tab_single:
 
                 st.info(
                     "**Why it matters:** Ensures positive momentum over a defined window, filtering out lagging or stagnant assets.\n\n"
-                    f"**Scoring Logic:** Received **{pts_perf} pts** because the trailing {RULE_PARAMS['perf_days']}-day return "
+                    f"**Scoring Logic:** Received **{pts_perf} / {RULE_PARAMS['weight_perf']} pts** because trailing {RULE_PARAMS['perf_days']}-day return "
                     f"({res['Period_Return']:.2f}%) {'met' if res['Pass_Perf'] else 'failed to meet'} the {RULE_PARAMS['min_return_pct']:.2f}% floor."
                 )
 
@@ -375,7 +384,7 @@ with tab_single:
 
                 st.info(
                     "**Why it matters:** Tracks volume-weighted accumulation to confirm institutional buying support.\n\n"
-                    f"**Scoring Logic:** Received **{pts_flow} pts** because 30-day directional volume flow "
+                    f"**Scoring Logic:** Received **{pts_flow} / {RULE_PARAMS['weight_flow']} pts** because directional volume flow "
                     f"({res['Flow_Score']}/100) was {'≥' if res['Pass_Flow'] else '<'} the {RULE_PARAMS['min_flow_score']} score threshold."
                 )
 
@@ -392,7 +401,7 @@ with tab_single:
 
                 st.info(
                     "**Why it matters:** Identifies market leaders outperforming the broad economy (SPY benchmark).\n\n"
-                    f"**Scoring Logic:** Received **{pts_rs} pts** because excess return vs SPY "
+                    f"**Scoring Logic:** Received **{pts_rs} / {RULE_PARAMS['weight_rs']} pts** because excess return vs SPY "
                     f"({res['Alpha_Pct']:+.2f}%) {'exceeded' if res['Pass_RS'] else 'fell short of'} the {RULE_PARAMS['min_alpha_pct']:.2f}% target."
                 )
 
@@ -406,7 +415,7 @@ with tab_single:
 
                 st.info(
                     "**Why it matters:** Rising volume confirms institutional participation behind a price move.\n\n"
-                    f"**Scoring Logic:** Received **{pts_vol} pts** because recent 5-day volume "
+                    f"**Scoring Logic:** Received **{pts_vol} / {RULE_PARAMS['weight_vol_exp']} pts** because recent 5-day volume "
                     f"is {res['Vol_Ratio']:.2f}x the 50-day average (target: ≥ {RULE_PARAMS['min_vol_ratio']:.2f}x)."
                 )
 
@@ -420,7 +429,7 @@ with tab_single:
 
                 st.info(
                     "**Why it matters:** Protects against erratic, high-volatility traps by measuring severe peak-to-trough drops.\n\n"
-                    f"**Scoring Logic:** Received **{pts_dd} pts** because the 60-day maximum pullback "
+                    f"**Scoring Logic:** Received **{pts_dd} / {RULE_PARAMS['weight_dd']} pts** because the 60-day maximum pullback "
                     f"({res['Max_Drawdown']:.2f}%) remained {'within' if res['Pass_DD'] else 'above'} the {RULE_PARAMS['max_drawdown_pct']:.2f}% safety limit."
                 )
 
@@ -436,7 +445,7 @@ with tab_single:
 
                 st.info(
                     "**Why it matters:** Assets breaking out or trading near 52-week highs carry minimal overhead resistance.\n\n"
-                    f"**Scoring Logic:** Received **{pts_52w} pts** because price sits "
+                    f"**Scoring Logic:** Received **{pts_52w} / {RULE_PARAMS['weight_52w']} pts** because price sits "
                     f"{res['Dist_52W_High']:.2f}% below its high, satisfying the ≤ {RULE_PARAMS['max_dist_52w_pct']:.2f}% proximity rule."
                 )
         else:
