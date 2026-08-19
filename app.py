@@ -3,9 +3,9 @@ app.py
 ======
 Modular ETF Rule Configurator & Scoring Engine (10 Rules)
 Features:
-- Main-tab Points Configurator presented as an interactive Data Editor Table.
-- Direct table cell editing for raw points and technical parameters.
-- Real-time 100-point total validation across all rules.
+- Streamlined Points Configurator matching the exact 3-column format:
+  [Rule #, Rule Name, My Weight]
+- Real-time 100-point total tracking and validation.
 """
 
 import streamlit as st
@@ -40,19 +40,19 @@ st.markdown("""
 if "user_tickers" not in st.session_state:
     st.session_state["user_tickers"] = "VFLO, SCHD, SCYB, JPST, JAAA, VEA, DIVI, EMXC, SMH, XLK, QQQ, SPY"
 
-# Default configuration table dataframe
+# Initialize weight table to match the layout
 if "config_df" not in st.session_state:
     st.session_state["config_df"] = pd.DataFrame([
-        {"Rule ID": 1, "Rule Name": "Moving Average Trend", "Param 1 (Fast / Min / Range)": 20.0, "Param 2 (Slow / Max)": 50.0, "Allocated Points": 15},
-        {"Rule ID": 2, "Rule Name": "Absolute Return", "Param 1 (Fast / Min / Range)": 60.0, "Param 2 (Slow / Max)": 2.0, "Allocated Points": 10},
-        {"Rule ID": 3, "Rule Name": "Institutional Money Flow", "Param 1 (Fast / Min / Range)": 50.0, "Param 2 (Slow / Max)": 0.0, "Allocated Points": 10},
-        {"Rule ID": 4, "Rule Name": "Relative Strength vs SPY", "Param 1 (Fast / Min / Range)": 1.0, "Param 2 (Slow / Max)": 0.0, "Allocated Points": 15},
-        {"Rule ID": 5, "Rule Name": "Volume Expansion", "Param 1 (Fast / Min / Range)": 1.1, "Param 2 (Slow / Max)": 0.0, "Allocated Points": 10},
-        {"Rule ID": 6, "Rule Name": "Max Trailing Drawdown", "Param 1 (Fast / Min / Range)": 10.0, "Param 2 (Slow / Max)": 0.0, "Allocated Points": 10},
-        {"Rule ID": 7, "Rule Name": "52-Week High Proximity", "Param 1 (Fast / Min / Range)": 8.0, "Param 2 (Slow / Max)": 0.0, "Allocated Points": 10},
-        {"Rule ID": 8, "Rule Name": "RSI Band Filter", "Param 1 (Fast / Min / Range)": 45.0, "Param 2 (Slow / Max)": 70.0, "Allocated Points": 10},
-        {"Rule ID": 9, "Rule Name": "Risk-Adjusted Sharpe Ratio", "Param 1 (Fast / Min / Range)": 0.5, "Param 2 (Slow / Max)": 0.0, "Allocated Points": 10},
-        {"Rule ID": 10, "Rule Name": "ATR Volatility Squeeze", "Param 1 (Fast / Min / Range)": 2.5, "Param 2 (Slow / Max)": 0.0, "Allocated Points": 10},
+        {"Rule #": "Rule 1", "Rule Name": "Moving Average Trend", "My Weight": 12},
+        {"Rule #": "Rule 2", "Rule Name": "Absolute Return", "My Weight": 8},
+        {"Rule #": "Rule 3", "Rule Name": "Institutional Money Flow", "My Weight": 11},
+        {"Rule #": "Rule 4", "Rule Name": "Relative Strength vs SPY", "My Weight": 15},
+        {"Rule #": "Rule 5", "Rule Name": "Volume Expansion", "My Weight": 6},
+        {"Rule #": "Rule 6", "Rule Name": "Max Trailing Drawdown", "My Weight": 16},
+        {"Rule #": "Rule 7", "Rule Name": "52-Week High Proximity", "My Weight": 7},
+        {"Rule #": "Rule 8", "Rule Name": "RSI Band Filter", "My Weight": 5},
+        {"Rule #": "Rule 9", "Rule Name": "Sharpe Ratio Filter", "My Weight": 15},
+        {"Rule #": "Rule 10", "Rule Name": "ATR Volatility Squeeze", "My Weight": 5},
     ])
 
 
@@ -119,7 +119,7 @@ def calculate_atr_ratio(df: pd.DataFrame, period: int = 14) -> float:
 # ==============================================================================
 
 def evaluate_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
-    """Evaluates 10 technical rules using raw point assignments."""
+    """Evaluates 10 technical rules using raw weight assignments."""
     if df.empty or len(df) < params["ema_slow"]:
         return None
 
@@ -204,7 +204,7 @@ def evaluate_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
     atr_pct = calculate_atr_ratio(df, period=14)
     rule_atr_passed = atr_pct <= params["max_atr_pct"]
 
-    # Direct Raw Sum Scoring
+    # Direct Weight Sum Scoring
     total_score = 0
     if rule_ma_passed: total_score += params["weight_ma"]
     if rule_perf_passed: total_score += params["weight_perf"]
@@ -262,69 +262,67 @@ tab_config, tab_screen, tab_single = st.tabs([
 
 
 # ==============================================================================
-# TAB 1: POINTS CONFIGURATOR (TABLE FORMAT)
+# TAB 1: POINTS CONFIGURATOR
 # ==============================================================================
 with tab_config:
-    st.header("Rules & Points Allocation Table")
-    st.caption("Edit parameter targets and raw points directly in the table cells below. Total points must equal **100**.")
-
-    # Interactive Data Editor
+    st.subheader("Rule Weight Allocation")
+    
+    # Interactive Table matching user's exact 3-column requested layout
     edited_df = st.data_editor(
         st.session_state["config_df"],
         hide_index=True,
-        use_container_width=True,
+        use_container_width=False,
+        width=500,
         column_config={
-            "Rule ID": st.column_config.NumberColumn("Rule #", disabled=True, format="%d"),
-            "Rule Name": st.column_config.TextColumn("Rule Target & Name", disabled=True),
-            "Param 1 (Fast / Min / Range)": st.column_config.NumberColumn("Threshold / Fast Span", step=0.5, format="%.1f"),
-            "Param 2 (Slow / Max)": st.column_config.NumberColumn("Limit / Slow Span", step=0.5, format="%.1f"),
-            "Allocated Points": st.column_config.NumberColumn("Points Allocation", min_value=0, max_value=100, step=1, format="%d pts")
+            "Rule #": st.column_config.TextColumn("Rule #", disabled=True),
+            "Rule Name": st.column_config.TextColumn("Rule Name", disabled=True),
+            "My Weight": st.column_config.NumberColumn("My Weight", min_value=0, max_value=100, step=1, format="%d")
         },
-        key="table_editor"
+        key="rule_weights_editor"
     )
 
-    # Keep session state updated with edited table
     st.session_state["config_df"] = edited_df
 
-    # Total points sum calculation
-    total_raw_points = int(edited_df["Allocated Points"].sum())
+    total_raw_points = int(edited_df["My Weight"].sum())
     is_points_valid = (total_raw_points == 100)
 
-    st.markdown("---")
+    # Clean bottom total display
+    st.markdown(f"### **Total:** `{total_raw_points}`")
+
     if is_points_valid:
-        st.success(f" Total Points Allocated: **{total_raw_points} / 100 Points** (Rule set is valid and active)")
+        st.success("✅ **Total weight equals 100 points.**")
     else:
         diff = 100 - total_raw_points
         action_str = f"Add {diff} pts" if diff > 0 else f"Subtract {abs(diff)} pts"
-        st.error(f" Total Points Allocated: **{total_raw_points} / 100 Points** ({action_str} in table above)")
+        st.error(f"⚠️ Current total is **{total_raw_points} pts**. Adjust weights to reach **100** ({action_str}).")
 
 
-# Parse parameters from dataframe for scoring engine
-rows = edited_df.to_dict("records")
+# Extract weights directly from the table rows
+weights = edited_df["My Weight"].tolist()
 RULE_PARAMS = {
-    "ema_fast": int(rows[0]["Param 1 (Fast / Min / Range)"]),
-    "ema_slow": int(rows[0]["Param 2 (Slow / Max)"]),
-    "weight_ma": int(rows[0]["Allocated Points"]),
-    "perf_days": int(rows[1]["Param 1 (Fast / Min / Range)"]),
-    "min_return_pct": float(rows[1]["Param 2 (Slow / Max)"]),
-    "weight_perf": int(rows[1]["Allocated Points"]),
-    "min_flow_score": float(rows[2]["Param 1 (Fast / Min / Range)"]),
-    "weight_flow": int(rows[2]["Allocated Points"]),
-    "min_alpha_pct": float(rows[3]["Param 1 (Fast / Min / Range)"]),
-    "weight_rs": int(rows[3]["Allocated Points"]),
-    "min_vol_ratio": float(rows[4]["Param 1 (Fast / Min / Range)"]),
-    "weight_vol_exp": int(rows[4]["Allocated Points"]),
-    "max_drawdown_pct": float(rows[5]["Param 1 (Fast / Min / Range)"]),
-    "weight_dd": int(rows[5]["Allocated Points"]),
-    "max_dist_52w_pct": float(rows[6]["Param 1 (Fast / Min / Range)"]),
-    "weight_52w": int(rows[6]["Allocated Points"]),
-    "min_rsi": float(rows[7]["Param 1 (Fast / Min / Range)"]),
-    "max_rsi": float(rows[7]["Param 2 (Slow / Max)"]),
-    "weight_rsi": int(rows[7]["Allocated Points"]),
-    "min_sharpe": float(rows[8]["Param 1 (Fast / Min / Range)"]),
-    "weight_sharpe": int(rows[8]["Allocated Points"]),
-    "max_atr_pct": float(rows[9]["Param 1 (Fast / Min / Range)"]),
-    "weight_atr": int(rows[9]["Allocated Points"])
+    "ema_fast": 20,
+    "ema_slow": 50,
+    "weight_ma": int(weights[0]),
+    "perf_days": 60,
+    "min_return_pct": 2.0,
+    "weight_perf": int(weights[1]),
+    "min_flow_score": 50.0,
+    "weight_flow": int(weights[2]),
+    "min_alpha_pct": 1.0,
+    "weight_rs": int(weights[3]),
+    "min_vol_ratio": 1.1,
+    "weight_vol_exp": int(weights[4]),
+    "max_drawdown_pct": 10.0,
+    "weight_dd": int(weights[5]),
+    "max_dist_52w_pct": 8.0,
+    "weight_52w": int(weights[6]),
+    "min_rsi": 45.0,
+    "max_rsi": 70.0,
+    "weight_rsi": int(weights[7]),
+    "min_sharpe": 0.5,
+    "weight_sharpe": int(weights[8]),
+    "max_atr_pct": 2.5,
+    "weight_atr": int(weights[9])
 }
 
 
@@ -437,22 +435,16 @@ with tab_single:
                     status_ma = "✅ PASS" if res["Pass_MA"] else "❌ FAIL"
                     pts_ma = RULE_PARAMS['weight_ma'] if res['Pass_MA'] else 0
                     st.metric("1. Trend Status", status_ma, delta=f"{pts_ma} / {RULE_PARAMS['weight_ma']} pts")
-                    st.write(f"- Fast EMA ({RULE_PARAMS['ema_fast']}D): ${res['Fast_EMA']:.2f}")
-                    st.write(f"- Slow EMA ({RULE_PARAMS['ema_slow']}D): ${res['Slow_EMA']:.2f}")
 
                 with c2:
                     status_perf = "✅ PASS" if res["Pass_Perf"] else "❌ FAIL"
                     pts_perf = RULE_PARAMS['weight_perf'] if res['Pass_Perf'] else 0
                     st.metric("2. Return Status", status_perf, delta=f"{pts_perf} / {RULE_PARAMS['weight_perf']} pts")
-                    st.write(f"- Return: {res['Period_Return']:.2f}%")
-                    st.write(f"- Min Target: {RULE_PARAMS['min_return_pct']}%")
 
                 with c3:
                     status_flow = "✅ PASS" if res["Pass_Flow"] else "❌ FAIL"
                     pts_flow = RULE_PARAMS['weight_flow'] if res['Pass_Flow'] else 0
                     st.metric("3. Flow Status", status_flow, delta=f"{pts_flow} / {RULE_PARAMS['weight_flow']} pts")
-                    st.write(f"- Flow Score: {res['Flow_Score']} / 100")
-                    st.write(f"- Target: ≥ {RULE_PARAMS['min_flow_score']}")
 
                 st.markdown("---")
                 c4, c5, c6 = st.columns(3)
@@ -460,22 +452,16 @@ with tab_single:
                     status_rs = "✅ PASS" if res["Pass_RS"] else "❌ FAIL"
                     pts_rs = RULE_PARAMS['weight_rs'] if res['Pass_RS'] else 0
                     st.metric("4. Rel Strength", status_rs, delta=f"{pts_rs} / {RULE_PARAMS['weight_rs']} pts")
-                    st.write(f"- Alpha: {res['Alpha_Pct']:+.2f}%")
-                    st.write(f"- Target Alpha: ≥ {RULE_PARAMS['min_alpha_pct']:.2f}%")
 
                 with c5:
                     status_vol = "✅ PASS" if res["Pass_VolExp"] else "❌ FAIL"
                     pts_vol = RULE_PARAMS['weight_vol_exp'] if res['Pass_VolExp'] else 0
                     st.metric("5. Volume Ratio", status_vol, delta=f"{pts_vol} / {RULE_PARAMS['weight_vol_exp']} pts")
-                    st.write(f"- 5D/50D Ratio: {res['Vol_Ratio']:.2f}x")
-                    st.write(f"- Min Target: ≥ {RULE_PARAMS['min_vol_ratio']:.2f}x")
 
                 with c6:
                     status_dd = "✅ PASS" if res["Pass_DD"] else "❌ FAIL"
                     pts_dd = RULE_PARAMS['weight_dd'] if res['Pass_DD'] else 0
                     st.metric("6. Max Drawdown", status_dd, delta=f"{pts_dd} / {RULE_PARAMS['weight_dd']} pts")
-                    st.write(f"- 60D Drawdown: {res['Max_Drawdown']:.2f}%")
-                    st.write(f"- Max Limit: ≤ {RULE_PARAMS['max_drawdown_pct']:.2f}%")
 
                 st.markdown("---")
                 c7, c8, c9 = st.columns(3)
@@ -483,22 +469,16 @@ with tab_single:
                     status_52w = "✅ PASS" if res["Pass_52W"] else "❌ FAIL"
                     pts_52w = RULE_PARAMS['weight_52w'] if res['Pass_52W'] else 0
                     st.metric("7. 52W Proximity", status_52w, delta=f"{pts_52w} / {RULE_PARAMS['weight_52w']} pts")
-                    st.write(f"- Off 52W High: -{res['Dist_52W_High']:.2f}%")
-                    st.write(f"- Limit: ≤ {RULE_PARAMS['max_dist_52w_pct']:.2f}%")
 
                 with c8:
                     status_rsi = "✅ PASS" if res["Pass_RSI"] else "❌ FAIL"
                     pts_rsi = RULE_PARAMS['weight_rsi'] if res['Pass_RSI'] else 0
                     st.metric("8. RSI Band", status_rsi, delta=f"{pts_rsi} / {RULE_PARAMS['weight_rsi']} pts")
-                    st.write(f"- Current RSI: {res['RSI']:.1f}")
-                    st.write(f"- Allowed Range: {RULE_PARAMS['min_rsi']} - {RULE_PARAMS['max_rsi']}")
 
                 with c9:
                     status_sharpe = "✅ PASS" if res["Pass_Sharpe"] else "❌ FAIL"
                     pts_sharpe = RULE_PARAMS['weight_sharpe'] if res['Pass_Sharpe'] else 0
                     st.metric("9. Sharpe Ratio", status_sharpe, delta=f"{pts_sharpe} / {RULE_PARAMS['weight_sharpe']} pts")
-                    st.write(f"- Sharpe: {res['Sharpe']:.2f}")
-                    st.write(f"- Min Target: ≥ {RULE_PARAMS['min_sharpe']:.2f}")
 
                 st.markdown("---")
                 c10, _ = st.columns([1, 2])
@@ -506,7 +486,5 @@ with tab_single:
                     status_atr = "✅ PASS" if res["Pass_ATR"] else "❌ FAIL"
                     pts_atr = RULE_PARAMS['weight_atr'] if res['Pass_ATR'] else 0
                     st.metric("10. ATR Volatility", status_atr, delta=f"{pts_atr} / {RULE_PARAMS['weight_atr']} pts")
-                    st.write(f"- ATR %: {res['ATR_Pct']:.2f}%")
-                    st.write(f"- Max Limit: ≤ {RULE_PARAMS['max_atr_pct']:.2f}%")
             else:
                 st.error(f"Could not retrieve historical data for '{lookup_ticker}'.")
