@@ -348,8 +348,6 @@ with tab_screen:
     st.session_state["user_tickers"] = user_input
     tickers_list = [t.strip().upper() for t in user_input.replace("\n", ",").split(",") if t.strip()]
 
-    min_total_score = st.slider("Minimum Composite Score Filter (out of 100):", 0, 100, 50)
-
     if st.button("Run Universe Screen", type="primary", disabled=not is_points_valid):
         results = []
         progress_bar = st.progress(0)
@@ -358,7 +356,7 @@ with tab_screen:
             df = fetch_etf_history(ticker)
             eval_res = evaluate_rules(df, benchmark_df, RULE_PARAMS)
             
-            if eval_res and eval_res["Score"] >= min_total_score:
+            if eval_res:
                 results.append({
                     "Ticker": ticker,
                     "Total Score": eval_res["Score"],
@@ -412,7 +410,7 @@ with tab_screen:
                 use_container_width=True
             )
         else:
-            st.warning("No ETFs passed the minimum composite score threshold.")
+            st.warning("Could not retrieve data for any of the provided tickers.")
 
 
 # ==============================================================================
