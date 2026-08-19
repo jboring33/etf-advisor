@@ -2,7 +2,8 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 
-from logic.tier1_screener import run_batch_screener, fetch_symbol_data
+# Corrected imports matching logic/tier1_screener.py
+from logic.tier1_screener import run_tier1_screen, fetch_etf_fundamentals
 from logic.tier2_signals import generate_symbol_scorecard
 
 # Page Configuration
@@ -32,7 +33,7 @@ user_input = st.sidebar.text_area(
     height=100
 )
 
-# FIXED: Sanitized string parsing to prevent unterminated string literal error
+# Sanitized string parsing
 tickers_list = [
     t.strip().upper() 
     for t in user_input.replace(",", " ").split() 
@@ -43,7 +44,7 @@ if st.sidebar.button("Update Watchlist"):
     st.session_state.watchlist = tickers_list
     st.sidebar.success("Watchlist updated successfully!")
 
-# Tab Layout (Historical Tracker Tab Removed)
+# Tab Layout
 tab1, tab2, tab3 = st.tabs([
     "📊 Batch Universe Screener", 
     "🔍 Single Symbol Scorecard", 
@@ -60,13 +61,11 @@ with tab1:
     if st.button("🚀 Run Batch Screener", type="primary"):
         with st.spinner("Fetching market data and running indicators..."):
             try:
-                results_df = run_batch_screener(st.session_state.watchlist)
+                results_df = run_tier1_screen(st.session_state.watchlist)
                 
-                if not results_df.empty:
+                if isinstance(results_df, pd.DataFrame) and not results_df.empty:
                     st.dataframe(
-                        results_df.style.background_gradient(
-                            cmap="Greens", subset=["Total Score"]
-                        ),
+                        results_df,
                         use_container_width=True
                     )
                 else:
