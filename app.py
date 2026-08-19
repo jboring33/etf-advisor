@@ -3,10 +3,10 @@ app.py
 ======
 Modular ETF Rule Configurator & Scoring Engine
 Features:
-- Adjustable Technical (EMA), Absolute Return, Money Flow, Relative Strength (SPY), 
-  Volume Expansion, Trailing Volatility/Drawdown, and 52-Week High Proximity Rules.
+- 7 Fine-Tuning Rules: EMA Trend, Absolute Return, Money Flow, Relative Strength (SPY), 
+  Volume Expansion, Trailing Drawdown, and 52-Week High Proximity.
 - Batch Screener for custom universes.
-- Single Symbol Scorecard with blank initial input.
+- Single Symbol Scorecard with detailed educational & scoring commentary.
 """
 
 import streamlit as st
@@ -338,25 +338,46 @@ with tab_single:
             with c1:
                 st.subheader("1. Trend Rule")
                 status_ma = "✅ PASS" if res["Pass_MA"] else "❌ FAIL"
-                st.metric("Trend Status", status_ma, delta=f"Points: {RULE_PARAMS['weight_ma'] if res['Pass_MA'] else 0}")
+                pts_ma = RULE_PARAMS['weight_ma'] if res['Pass_MA'] else 0
+                st.metric("Trend Status", status_ma, delta=f"Points: {pts_ma} / {RULE_PARAMS['weight_ma']}")
                 st.write(f"- **Fast EMA ({RULE_PARAMS['ema_fast']}D):** ${res['Fast_EMA']:.2f}")
                 st.write(f"- **Slow EMA ({RULE_PARAMS['ema_slow']}D):** ${res['Slow_EMA']:.2f}")
                 st.write(f"- **Spread:** {res['MA_Gap']:.2f}%")
+                
+                st.info(
+                    "**Why it matters:** Fast EMAs staying above Slow EMAs confirms a sustained, structural uptrend.\n\n"
+                    f"**Scoring Logic:** Received **{pts_ma} pts** because the {RULE_PARAMS['ema_fast']}-day EMA standard "
+                    f"is {'above' if res['Pass_MA'] else 'below'} the {RULE_PARAMS['ema_slow']}-day EMA."
+                )
 
             with c2:
                 st.subheader("2. Absolute Return")
                 status_perf = "✅ PASS" if res["Pass_Perf"] else "❌ FAIL"
-                st.metric("Return Status", status_perf, delta=f"Points: {RULE_PARAMS['weight_perf'] if res['Pass_Perf'] else 0}")
+                pts_perf = RULE_PARAMS['weight_perf'] if res['Pass_Perf'] else 0
+                st.metric("Return Status", status_perf, delta=f"Points: {pts_perf} / {RULE_PARAMS['weight_perf']}")
                 st.write(f"- **Lookback Window:** {RULE_PARAMS['perf_days']} Days")
                 st.write(f"- **Actual Return:** {res['Period_Return']:.2f}%")
                 st.write(f"- **Target Return:** ≥ {RULE_PARAMS['min_return_pct']:.2f}%")
 
+                st.info(
+                    "**Why it matters:** Ensures positive momentum over a defined window, filtering out lagging or stagnant assets.\n\n"
+                    f"**Scoring Logic:** Received **{pts_perf} pts** because the trailing {RULE_PARAMS['perf_days']}-day return "
+                    f"({res['Period_Return']:.2f}%) {'met' if res['Pass_Perf'] else 'failed to meet'} the {RULE_PARAMS['min_return_pct']:.2f}% floor."
+                )
+
             with c3:
                 st.subheader("3. Money Flow")
                 status_flow = "✅ PASS" if res["Pass_Flow"] else "❌ FAIL"
-                st.metric("Flow Status", status_flow, delta=f"Points: {RULE_PARAMS['weight_flow'] if res['Pass_Flow'] else 0}")
+                pts_flow = RULE_PARAMS['weight_flow'] if res['Pass_Flow'] else 0
+                st.metric("Flow Status", status_flow, delta=f"Points: {pts_flow} / {RULE_PARAMS['weight_flow']}")
                 st.write(f"- **Flow Score:** {res['Flow_Score']} / 100")
                 st.write(f"- **Target Score:** ≥ {RULE_PARAMS['min_flow_score']}")
+
+                st.info(
+                    "**Why it matters:** Tracks volume-weighted accumulation to confirm institutional buying support.\n\n"
+                    f"**Scoring Logic:** Received **{pts_flow} pts** because 30-day directional volume flow "
+                    f"({res['Flow_Score']}/100) was {'≥' if res['Pass_Flow'] else '<'} the {RULE_PARAMS['min_flow_score']} score threshold."
+                )
 
             st.markdown("---")
             c4, c5, c6 = st.columns(3)
@@ -364,33 +385,61 @@ with tab_single:
             with c4:
                 st.subheader("4. Relative Strength vs SPY")
                 status_rs = "✅ PASS" if res["Pass_RS"] else "❌ FAIL"
-                st.metric("Rel Strength Status", status_rs, delta=f"Points: {RULE_PARAMS['weight_rs'] if res['Pass_RS'] else 0}")
+                pts_rs = RULE_PARAMS['weight_rs'] if res['Pass_RS'] else 0
+                st.metric("Rel Strength Status", status_rs, delta=f"Points: {pts_rs} / {RULE_PARAMS['weight_rs']}")
                 st.write(f"- **Excess Alpha:** {res['Alpha_Pct']:+.2f}%")
                 st.write(f"- **Target Alpha:** ≥ {RULE_PARAMS['min_alpha_pct']:.2f}%")
+
+                st.info(
+                    "**Why it matters:** Identifies market leaders outperforming the broad economy (SPY benchmark).\n\n"
+                    f"**Scoring Logic:** Received **{pts_rs} pts** because excess return vs SPY "
+                    f"({res['Alpha_Pct']:+.2f}%) {'exceeded' if res['Pass_RS'] else 'fell short of'} the {RULE_PARAMS['min_alpha_pct']:.2f}% target."
+                )
 
             with c5:
                 st.subheader("5. Volume Expansion")
                 status_vol = "✅ PASS" if res["Pass_VolExp"] else "❌ FAIL"
-                st.metric("Volume Status", status_vol, delta=f"Points: {RULE_PARAMS['weight_vol_exp'] if res['Pass_VolExp'] else 0}")
+                pts_vol = RULE_PARAMS['weight_vol_exp'] if res['Pass_VolExp'] else 0
+                st.metric("Volume Status", status_vol, delta=f"Points: {pts_vol} / {RULE_PARAMS['weight_vol_exp']}")
                 st.write(f"- **5D vs 50D Vol Ratio:** {res['Vol_Ratio']:.2f}x")
                 st.write(f"- **Target Ratio:** ≥ {RULE_PARAMS['min_vol_ratio']:.2f}x")
+
+                st.info(
+                    "**Why it matters:** Rising volume confirms institutional participation behind a price move.\n\n"
+                    f"**Scoring Logic:** Received **{pts_vol} pts** because recent 5-day volume "
+                    f"is {res['Vol_Ratio']:.2f}x the 50-day average (target: ≥ {RULE_PARAMS['min_vol_ratio']:.2f}x)."
+                )
 
             with c6:
                 st.subheader("6. Trailing Drawdown")
                 status_dd = "✅ PASS" if res["Pass_DD"] else "❌ FAIL"
-                st.metric("Drawdown Status", status_dd, delta=f"Points: {RULE_PARAMS['weight_dd'] if res['Pass_DD'] else 0}")
+                pts_dd = RULE_PARAMS['weight_dd'] if res['Pass_DD'] else 0
+                st.metric("Drawdown Status", status_dd, delta=f"Points: {pts_dd} / {RULE_PARAMS['weight_dd']}")
                 st.write(f"- **60D Max Drawdown:** {res['Max_Drawdown']:.2f}%")
                 st.write(f"- **Allowed Limit:** ≤ {RULE_PARAMS['max_drawdown_pct']:.2f}%")
+
+                st.info(
+                    "**Why it matters:** Protects against erratic, high-volatility traps by measuring severe peak-to-trough drops.\n\n"
+                    f"**Scoring Logic:** Received **{pts_dd} pts** because the 60-day maximum pullback "
+                    f"({res['Max_Drawdown']:.2f}%) remained {'within' if res['Pass_DD'] else 'above'} the {RULE_PARAMS['max_drawdown_pct']:.2f}% safety limit."
+                )
 
             st.markdown("---")
             c7, _ = st.columns([1, 2])
             with c7:
                 st.subheader("7. Proximity to 52-Week High")
                 status_52w = "✅ PASS" if res["Pass_52W"] else "❌ FAIL"
-                st.metric("52W Proximity Status", status_52w, delta=f"Points: {RULE_PARAMS['weight_52w'] if res['Pass_52W'] else 0}")
+                pts_52w = RULE_PARAMS['weight_52w'] if res['Pass_52W'] else 0
+                st.metric("52W Proximity Status", status_52w, delta=f"Points: {pts_52w} / {RULE_PARAMS['weight_52w']}")
                 st.write(f"- **Distance Off High:** -{res['Dist_52W_High']:.2f}%")
                 st.write(f"- **Max Allowed Distance:** ≤ {RULE_PARAMS['max_dist_52w_pct']:.2f}%")
+
+                st.info(
+                    "**Why it matters:** Assets breaking out or trading near 52-week highs carry minimal overhead resistance.\n\n"
+                    f"**Scoring Logic:** Received **{pts_52w} pts** because price sits "
+                    f"{res['Dist_52W_High']:.2f}% below its high, satisfying the ≤ {RULE_PARAMS['max_dist_52w_pct']:.2f}% proximity rule."
+                )
         else:
             st.error(f"Could not retrieve historical data for '{lookup_ticker}'. Please verify the symbol.")
     else:
-        st.info("👆 Enter a ticker symbol above to generate a rule evaluation breakdown.")
+        st.info("👆 Enter a ticker symbol above to generate a detailed rule evaluation breakdown.")
