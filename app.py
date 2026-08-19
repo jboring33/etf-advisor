@@ -9,7 +9,7 @@ import numpy as np
 # Force root directory into sys.path to resolve module discovery
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-# Direct imports for internal modules with fallback protection
+# Safe imports for internal modules
 try:
     import logic.tier1_screener as tier1
 except ImportError:
@@ -46,19 +46,19 @@ if "favorites" not in st.session_state:
     st.session_state.favorites = []
 
 # -----------------------------------------------------------------------------
-# HELPER FUNCTIONS & TABLE RENDERING
+# HELPER FUNCTIONS & CUSTOM TABLE LAYOUT
 # -----------------------------------------------------------------------------
 def render_fund_table(df_subset, bucket_name):
     """
-    Renders structured fund metrics grouped by tax account bucket with interactive
-    controls for favoriting and removing tickers directly from the view.
+    Renders fund metrics grouped by tax account bucket.
+    Includes hover flyover for fund names and places Favorite / Delete controls 
+    at the end of each row.
     """
     if df_subset.empty:
         st.info(f"No ETF candidates currently assigned to **{bucket_name}**.")
         return
 
-    # Commentary / Overview Header for the Table
-    st.caption(f"Showing **{len(df_subset)}** ETF candidate(s) optimized for **{bucket_name}**.")
+    st.caption(f"Showing **{len(df_subset)}** ETF candidate(s) categorized under **{bucket_name}**.")
 
     for idx, row in df_subset.iterrows():
         ticker = row.get("Ticker", idx)
@@ -71,11 +71,13 @@ def render_fund_table(df_subset, bucket_name):
         aum = row.get("AUM ($M)", "N/A")
 
         with st.container():
-            col1, col2, col3, col4, col5, col6, col7 = st.columns([1.2, 2.5, 1.5, 1.2, 1.2, 1.0, 1.0])
+            # Layout: Details first, trailing Favorite & Delete controls at the end
+            col1, col2, col3, col4, col5, col6, col7 = st.columns([1.2, 2.0, 1.5, 1.2, 1.2, 1.0, 0.8])
 
             with col1:
-                st.markdown(f"**{ticker}**", help=f"{ticker}: {name}")
-                st.caption(category)
+                # Ticker with Name Flyover/Tooltip
+                st.markdown(f"**{ticker}**", help=f"Full Name: {name}")
+                st.caption(f"{category}")
 
             with col2:
                 st.write(f"**Region:** {region}")
@@ -101,8 +103,8 @@ def render_fund_table(df_subset, bucket_name):
                     st.rerun()
 
             with col7:
-                # Delete Toggle
-                if st.button("🗑️", key=f"del_{bucket_name}_{ticker}", help=f"Remove {ticker} from current view"):
+                # Delete Toggle at end of row
+                if st.button("🗑️", key=f"del_{bucket_name}_{ticker}", help=f"Remove {ticker} from watchlist"):
                     if ticker in st.session_state.watchlist:
                         st.session_state.watchlist.remove(ticker)
                         st.rerun()
@@ -121,7 +123,7 @@ user_input = st.sidebar.text_area(
     height=100
 )
 
-# FIXED: Sanitized string parsing to prevent syntax errors
+# Cleaned, valid string parsing to avoid literal syntax errors
 tickers_list = [
     t.strip().upper() 
     for t in user_input.replace(",", " ").split() 
@@ -146,19 +148,18 @@ tab1, tab2, tab3 = st.tabs([
 ])
 
 # -----------------------------------------------------------------------------
-# TAB 1: BATCH UNIVERSE SCREENER (ACCOUNT BUCKETS & TABLES)
+# TAB 1: BATCH UNIVERSE SCREENER (ACCOUNT BUCKET TABS)
 # -----------------------------------------------------------------------------
 with tab1:
     st.header("Batch Universe Screener")
     st.markdown("""
-    Screen your active watchlist across fundamental thresholds, risk parameters, and tax allocation buckets.
-    Select an account type below to view candidate ETFs categorized specifically for that vehicle.
+    Screen candidate ETFs across fundamental quality thresholds and view results grouped
+    by tax account efficiency.
     """)
 
     if st.button("🚀 Run Batch Screener", type="primary"):
         with st.spinner("Fetching market data, fundamentals, and running indicators..."):
             try:
-                # Fetch screened DataFrame from tier1 module
                 if hasattr(tier1, "run_tier1_screen"):
                     results_df = tier1.run_tier1_screen(st.session_state.watchlist)
                 elif hasattr(tier1, "run_batch_screener"):
@@ -170,7 +171,7 @@ with tab1:
             except Exception as e:
                 st.error(f"Error running batch screener: {str(e)}")
 
-    # Display Bucket Tabs if screener data is available
+    # Account Bucket Tab Presentation
     if "screener_results" in st.session_state and isinstance(st.session_state["screener_results"], pd.DataFrame):
         df_results = st.session_state["screener_results"]
 
@@ -183,26 +184,26 @@ with tab1:
 
             with bucket_taxable:
                 st.subheader("Taxable Brokerage Candidates")
-                st.info("Focuses on high tax efficiency, broad core equities, low turnover, and tax-managed funds.")
+                st.info("Focuses on high tax efficiency, broad core equities, and low-turnover funds.")
                 sub_df = df_results[df_results["Bucket"].str.contains("Taxable", case=False, na=False)] if "Bucket" in df_results.columns else df_results
                 render_fund_table(sub_df, "Taxable Brokerage")
 
             with bucket_roth:
                 st.subheader("Roth IRA Candidates")
-                st.info("Focuses on high-growth assets, emerging markets, and high total-return drivers for tax-free compounding.")
+                st.info("Focuses on high-growth assets, emerging markets, and total return drivers for tax-free compounding.")
                 sub_df = df_results[df_results["Bucket"].str.contains("Roth", case=False, na=False)] if "Bucket" in df_results.columns else df_results
                 render_fund_table(sub_df, "Roth IRA")
 
             with bucket_trad:
                 st.subheader("Traditional IRA Candidates")
-                st.info("Focuses on high-yield, dividend, fixed-income, and ordinary income-generating funds sheltered from annual tax drag.")
+                st.info("Focuses on high yield, dividend focus, and income drivers sheltered from annual tax drag.")
                 sub_df = df_results[df_results["Bucket"].str.contains("Traditional", case=False, na=False)] if "Bucket" in df_results.columns else df_results
                 render_fund_table(sub_df, "Traditional IRA")
         else:
-            st.warning("No screening results available. Click 'Run Batch Screener' to load data.")
+            st.warning("No screening results returned. Click 'Run Batch Screener' to load data.")
 
 # -----------------------------------------------------------------------------
-# TAB 2: SINGLE SYMBOL SCORECARD
+# TAB 2: SINGLE SYMBOL SCORECARD & COMMENTARY
 # -----------------------------------------------------------------------------
 with tab2:
     st.header("Single Symbol Scorecard")
@@ -228,14 +229,14 @@ with tab2:
                     st.markdown(f"**Target Allocation:** {scorecard.get('allocation_recommendation', 'N/A')}")
                 
                 with col2:
-                    st.subheader("Rule Breakdown & Commentary")
+                    st.subheader("Rule Breakdown")
                     if "breakdown" in scorecard:
                         st.table(pd.DataFrame(scorecard["breakdown"]))
                     else:
-                        st.info("Detailed rule breakdown table available upon running signals.")
+                        st.info("Rule breakdown available once signals run.")
 
                 if "commentary" in scorecard:
-                    st.subheader("Tactical Investment Commentary")
+                    st.subheader("Tactical Commentary")
                     st.write(scorecard["commentary"])
 
             except Exception as e:
@@ -246,7 +247,7 @@ with tab2:
 # -----------------------------------------------------------------------------
 with tab3:
     st.header("Points & Signal Weight Configurator")
-    st.markdown("Adjust weight allocations and scoring criteria for tactical screeners.")
+    st.markdown("Adjust weight allocations across quantitative screening criteria.")
 
     col_a, col_b = st.columns(2)
     
@@ -261,4 +262,4 @@ with tab3:
         st.slider("Yield / Fundamental Quality", 0, 30, 25, key="weight_fund")
         st.slider("Macro Regime Overlay", 0, 25, 25, key="weight_macro")
 
-    st.success("Configuration weights updated and saved to session state.")
+    st.success("Configuration saved automatically to session state.")
