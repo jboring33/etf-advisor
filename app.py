@@ -3,7 +3,8 @@ app.py
 ======
 Modular ETF Rule Configurator & Scoring Engine (10 Rules)
 Features:
-- Includes Exchange information for each ticker via yfinance metadata.
+- Primary exchange displayed in the main table under "Exchange".
+- Renamed "Total Score" column to "Score".
 - Completely user-managed persistent ticker list across reboots and sessions.
 - Clean scoring engine with direct Action Signals (🟢 BUY / 🟡 HOLD / 🔴 SELL).
 - Dynamic Buy/Hold/Sell action banner inside the Modal Scorecard.
@@ -145,7 +146,7 @@ def calculate_atr_ratio(df: pd.DataFrame, period: int = 14) -> float:
     return float((atr / latest_close) * 100) if latest_close > 0 else 0.0
 
 def derive_action_signal(score: int) -> tuple[str, str, str]:
-    """Generates a Buy, Hold, or Sell signal based on total score."""
+    """Generates a Buy, Hold, or Sell signal based on score."""
     if score >= 70:
         return "🟢 BUY", "success", "Strong institutional alignment and multi-factor momentum. Favorable candidate for fresh capital allocation."
     elif score >= 45:
@@ -287,7 +288,7 @@ def evaluate_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
         f"**Expected Range:** ≤ 2.5%."
     )
 
-    # Calculate Total
+    # Calculate Total Score
     total_score = 0
     if rule_ma_passed: total_score += params["weight_ma"]
     if rule_perf_passed: total_score += params["weight_perf"]
@@ -510,7 +511,7 @@ if st.button("Run Portfolio Screen", type="primary", disabled=not is_points_vali
                 "Ticker": ticker,
                 "Exchange": exchange,
                 "Action": action_sig,
-                "Total Score": eval_res["Score"],
+                "Score": eval_res["Score"],
                 "Price_Raw": eval_res['Close'],
                 "Price": f"${eval_res['Close']:.2f}",
                 "Trend": "✅ Pass" if eval_res["Pass_MA"] else "❌ Fail",
@@ -531,7 +532,7 @@ if st.button("Run Portfolio Screen", type="primary", disabled=not is_points_vali
 
     if results:
         res_df = pd.DataFrame(results)
-        res_df = res_df.sort_values(by="Total Score", ascending=False).reset_index(drop=True)
+        res_df = res_df.sort_values(by="Score", ascending=False).reset_index(drop=True)
         st.session_state["last_screener_df"] = res_df
     else:
         st.warning("Could not retrieve valid historical data for any provided tickers.")
@@ -547,13 +548,16 @@ if "last_screener_df" in st.session_state and not st.session_state["last_screene
     event = st.dataframe(
         screener_df.drop(columns=["Price_Raw"]),
         hide_index=True,
+        column_order=[
+            "Ticker", "Exchange", "Action", "Score", "Price", 
+            "Trend", "Return", "Flow", "Rel Strength", "Vol Exp", 
+            "Drawdown", "52W High", "RSI Band", "Sharpe", "ATR Squeeze"
+        ],
         column_config={
             "Ticker": st.column_config.TextColumn("Ticker"),
             "Exchange": st.column_config.TextColumn("Exchange"),
             "Action": st.column_config.TextColumn("Signal", help="🟢 BUY (≥70), 🟡 HOLD (45-69), 🔴 SELL (<45)"),
-            "Total Score": st.column_config.NumberColumn(
-                "Total Score", format="%d pts"
-            )
+            "Score": st.column_config.NumberColumn("Score", format="%d pts")
         },
         use_container_width=True,
         on_select="rerun",
