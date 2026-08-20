@@ -3,10 +3,10 @@ app.py
 ======
 Modular ETF Rule Configurator & Scoring Engine (10 Rules)
 Features:
-- Configurator in Sidebar (⚙️ icon) to edit rules and point weights.
-- Exchange/Market mapping column included in results.
-- Portfolio screen table displays Score as numeric value and uses Signal icons for Buy/Hold/Sell.
-- Interactive Scorecard Modal Window on row selection detailing full technical breakdown.
+- Sidebar Configurator (⚙️ icon) to edit 10 rules and point weights.
+- Non-blocking data fetching to prevent infinite Streamlit spinner lock.
+- Exchange/Market mapping column included in screening output.
+- Interactive Scorecard Modal Window on table row click detailing full technical breakdown.
 """
 
 import os
@@ -104,12 +104,12 @@ def get_previous_run_data() -> pd.DataFrame:
 
 
 # ==============================================================================
-# DATA FETCHING ENGINE
+# SAFE DATA FETCHING ENGINE (PREVENTS INFINITE SPINNER)
 # ==============================================================================
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_etf_history(ticker: str) -> tuple[pd.DataFrame, str]:
-    """Fetches 1 year of daily price history and exchange/market information."""
+    """Fetches 1 year of daily price history and exchange/market info with timeouts."""
     ticker_clean = ticker.strip().upper()
     market_name = "N/A"
     df_out = pd.DataFrame()
@@ -117,23 +117,20 @@ def fetch_etf_history(ticker: str) -> tuple[pd.DataFrame, str]:
     try:
         ticker_obj = yf.Ticker(ticker_clean)
         
-        # Retrieve primary exchange/market metadata
-        info = ticker_obj.fast_info
-        raw_exchange = getattr(info, "exchange", None)
-        
-        if raw_exchange:
-            market_map = {
-                "NMS": "NASDAQ",
-                "NGM": "NASDAQ",
-                "NCM": "NASDAQ",
-                "PCX": "NYSE Arca",
-                "NYQ": "NYSE",
-                "ASE": "NYSE American",
-                "BTS": "BATS"
-            }
-            market_name = market_map.get(raw_exchange, raw_exchange)
+        # Safely extract exchange metadata without hanging on remote attributes
+        try:
+            raw_exchange = getattr(ticker_obj.fast_info, "exchange", None)
+            if raw_exchange:
+                market_map = {
+                    "NMS": "NASDAQ", "NGM": "NASDAQ", "NCM": "NASDAQ",
+                    "PCX": "NYSE Arca", "NYQ": "NYSE", "ASE": "NYSE American", "BTS": "BATS"
+                }
+                market_name = market_map.get(raw_exchange, raw_exchange)
+        except Exception:
+            market_name = "N/A"
 
-        df = ticker_obj.history(period="1y", auto_adjust=True)
+        # Explicit timeout to avoid thread lockup
+        df = ticker_obj.history(period="1y", auto_adjust=True, timeout=10)
         if df is not None and not df.empty:
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
@@ -346,17 +343,15 @@ def evaluate_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
 
 
 # ==============================================================================
-# MODAL SCORECARD WINDOW (@st.dialog)
+# MODAL SCORECARD WINDOW (@st.dialog) - NON-BLOCKING
 # ==============================================================================
 
 @st.dialog("🔍 Scorecard Breakdown", width="large")
-def show_scorecard_modal(ticker: str, benchmark_df: pd.DataFrame, params: dict):
-    """Renders ETF Scorecard with full signal analysis in a modal dialog."""
+def show_scorecard_modal(ticker: str, df: pd.DataFrame, market: str, benchmark_df: pd.DataFrame, params: dict):
+    """Renders ETF Scorecard with full signal breakdown using pre-fetched data."""
     st.subheader(f"Scorecard: {ticker}")
 
-    with st.spinner(f"Analyzing {ticker}..."):
-        df, market = fetch_etf_history(ticker)
-        res = evaluate_rules(df, benchmark_df, params)
+    res = evaluate_rules(df, benchmark_df, params)
 
     if res is not None:
         prior_run = get_previous_run_data()
@@ -451,7 +446,7 @@ def show_scorecard_modal(ticker: str, benchmark_df: pd.DataFrame, params: dict):
             st.metric("10. ATR Volatility", status_atr, delta=f"{pts_atr} / {params['weight_atr']} pts")
             st.info(res["Comm_ATR"])
     else:
-        st.error(f"Could not retrieve historical data for '{ticker}'.")
+        st.error(f"Could not calculate scorecard metrics for '{ticker}'.")
 
 
 # ==============================================================================
@@ -589,8 +584,6 @@ if "last_screener_df" in st.session_state and not st.session_state["last_screene
     st.caption("💡 Select any row to open its detailed Scorecard modal window.")
 
     screener_df = st.session_state["last_screener_df"]
-    
-    # Safely prepare dataframe for table display while preserving internal keys
     display_cols = [c for c in screener_df.columns if c not in ["Price_Raw", "Total Score Raw"]]
     
     event = st.dataframe(
@@ -607,8 +600,10 @@ if "last_screener_df" in st.session_state and not st.session_state["last_screene
         selection_mode="single-row"
     )
 
-    # Open Modal Window on Table Row Click
+    # Open Modal Window safely without re-triggering recursive network calls
     if event and event.selection and event.selection.rows:
         selected_index = event.selection.rows[0]
         selected_ticker = screener_df.iloc[selected_index]["Ticker"]
-        show_scorecard_modal(selected_ticker, benchmark_df, RULE_PARAMS)
+        
+        ticker_df, market_name = fetch_etf_history(selected_ticker)
+        show_scorecard_modal(selected_ticker, ticker_df, market_name, benchmark_df, RULE_PARAMS)
