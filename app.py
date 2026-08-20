@@ -3,9 +3,9 @@ app.py
 ======
 Modular ETF Rule Configurator & Scoring Engine (10 Rules)
 Features:
-- Fixed historical run lookup for accurate 'vs Prior Run' tracking.
-- Action Signal Column (🟢 BUY / 🟡 HOLD / 🔴 SELL) based on score bands.
-- Dynamic Buy/Hold/Sell action banner inside the Modal Scorecard.
+- Configurator in Sidebar (⚙️ icon).
+- Portfolio screen table displays Score as numeric value and uses Signal icons for Buy/Hold/Sell.
+- Modal Scorecard maintains detailed technical breakdown and Action Signal banner.
 """
 
 import os
@@ -59,7 +59,7 @@ if "config_df_v2" not in st.session_state:
     ])
 
 def save_run_snapshot(results: list):
-    """Saves every execution with a timestamp to enable historical comparison."""
+    """Saves execution history with precise timestamps for cross-run comparisons."""
     run_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     records = []
     for r in results:
@@ -82,7 +82,7 @@ def save_run_snapshot(results: list):
         new_df.to_csv(SNAPSHOT_FILE, index=False)
 
 def get_previous_run_data() -> pd.DataFrame:
-    """Retrieves the immediately preceding run from snapshot history."""
+    """Retrieves previous run snapshot data."""
     if not os.path.exists(SNAPSHOT_FILE):
         return pd.DataFrame()
     
@@ -93,7 +93,7 @@ def get_previous_run_data() -> pd.DataFrame:
         
         timestamps = df["Run_Timestamp"].unique()
         if len(timestamps) < 2:
-            return pd.DataFrame()  # Needs at least 2 distinct runs to compare
+            return pd.DataFrame()
         
         previous_timestamp = timestamps[-2]
         prior_df = df[df["Run_Timestamp"] == previous_timestamp]
@@ -158,13 +158,13 @@ def calculate_atr_ratio(df: pd.DataFrame, period: int = 14) -> float:
     return float((atr / latest_close) * 100) if latest_close > 0 else 0.0
 
 def derive_action_signal(score: int) -> tuple[str, str, str]:
-    """Generates a Buy, Hold, or Sell signal based on total score."""
+    """Generates a Buy, Hold, or Sell signal with guidance based on score."""
     if score >= 70:
-        return "🟢 BUY", "success", "Strong institutional alignment and multi-factor momentum. Favorable candidate for fresh capital allocation."
+        return "🟢 BUY", "success", "Strong institutional momentum and rule setup. Prime allocation candidate."
     elif score >= 45:
-        return "🟡 HOLD", "warning", "Neutral performance or consolidation phase. Maintain existing exposure but await further breakout confirmation before adding."
+        return "🟡 HOLD", "warning", "Neutral performance or consolidation. Hold existing positions; hold off on adding."
     else:
-        return "🔴 SELL", "error", "Technical metrics indicate lagging momentum, elevated drawdown, or capital outflow. Consider trimming or reallocating."
+        return "🔴 SELL", "error", "Underperforming technical structure or high drawdown. Trim or exit position."
 
 def evaluate_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
     if df.empty or len(df) < params["ema_slow"]:
@@ -208,7 +208,7 @@ def evaluate_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
     rule_flow_passed = flow_score >= params["min_flow_score"]
     comm_flow = (
         f"**Data:** Flow Index: {flow_score}/100\n\n"
-        f"**Why it Matters:** Identifies accumulation vs distribution.\n\n"
+        f"**Why it Matters:** Tracks accumulation vs distribution.\n\n"
         f"**Expected Range:** 50-100."
     )
 
@@ -224,7 +224,7 @@ def evaluate_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
         rule_rs_passed = alpha_pct >= params["min_alpha_pct"]
     comm_rs = (
         f"**Data:** Alpha vs SPY: {alpha_pct:+.2f}%\n\n"
-        f"**Why it Matters:** Outperforming market benchmark.\n\n"
+        f"**Why it Matters:** Outperforming S&P 500 benchmark.\n\n"
         f"**Expected Range:** ≥ +1.0% alpha."
     )
 
@@ -238,7 +238,7 @@ def evaluate_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
         rule_vol_exp_passed = vol_ratio >= params["min_vol_ratio"]
     comm_vol = (
         f"**Data:** 5d/50d Volume Ratio: {vol_ratio:.2f}x\n\n"
-        f"**Why it Matters:** Signals institutional buying spikes.\n\n"
+        f"**Why it Matters:** Institutional volume surge detection.\n\n"
         f"**Expected Range:** ≥ 1.1x."
     )
 
@@ -253,7 +253,7 @@ def evaluate_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
         rule_dd_passed = max_dd_pct <= params["max_drawdown_pct"]
     comm_dd = (
         f"**Data:** 60d Max Drawdown: {max_dd_pct:.2f}%\n\n"
-        f"**Why it Matters:** Penalizes high risk/volatile drops.\n\n"
+        f"**Why it Matters:** Restricts high drawdown risk.\n\n"
         f"**Expected Range:** ≤ 10.0%."
     )
 
@@ -266,7 +266,7 @@ def evaluate_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
         rule_52w_passed = dist_52w_high_pct <= params["max_dist_52w_pct"]
     comm_52w = (
         f"**Data:** Distance from 52W High: {dist_52w_high_pct:.2f}%\n\n"
-        f"**Why it Matters:** Evaluates proximity to new highs.\n\n"
+        f"**Why it Matters:** Proximity to 52-week highs.\n\n"
         f"**Expected Range:** ≤ 8.0%."
     )
 
@@ -275,7 +275,7 @@ def evaluate_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
     rule_rsi_passed = (rsi_val >= params["min_rsi"]) and (rsi_val <= params["max_rsi"])
     comm_rsi = (
         f"**Data:** 14d RSI: {rsi_val:.1f}\n\n"
-        f"**Why it Matters:** Avoids oversold or overbought extremes.\n\n"
+        f"**Why it Matters:** Avoids overbought/oversold limits.\n\n"
         f"**Expected Range:** 45 to 70."
     )
 
@@ -287,7 +287,7 @@ def evaluate_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
     rule_sharpe_passed = sharpe_ratio >= params["min_sharpe"]
     comm_sharpe = (
         f"**Data:** Ann. Sharpe Ratio: {sharpe_ratio:.2f}\n\n"
-        f"**Why it Matters:** Measures risk-adjusted returns.\n\n"
+        f"**Why it Matters:** Risk-adjusted returns.\n\n"
         f"**Expected Range:** ≥ 0.5."
     )
 
@@ -296,7 +296,7 @@ def evaluate_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
     rule_atr_passed = atr_pct <= params["max_atr_pct"]
     comm_atr = (
         f"**Data:** ATR % of Price: {atr_pct:.2f}%\n\n"
-        f"**Why it Matters:** Measures volatility squeeze.\n\n"
+        f"**Why it Matters:** Detects volatility squeezes.\n\n"
         f"**Expected Range:** ≤ 2.5%."
     )
 
@@ -335,7 +335,7 @@ def evaluate_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
 
 @st.dialog("🔍 Scorecard Breakdown", width="large")
 def show_scorecard_modal(ticker: str, benchmark_df: pd.DataFrame, params: dict):
-    """Renders the ETF Scorecard with Buy/Hold/Sell banner inside a popup modal."""
+    """Renders ETF Scorecard with full signal analysis in a modal."""
     st.subheader(f"Scorecard: {ticker}")
 
     with st.spinner(f"Analyzing {ticker}..."):
@@ -522,8 +522,9 @@ if st.button("Run Portfolio Screen", type="primary", disabled=not is_points_vali
             action_sig, _, _ = derive_action_signal(eval_res["Score"])
             results.append({
                 "Ticker": ticker,
-                "Action": action_sig,
-                "Total Score": eval_res["Score"],
+                "Signal": action_sig,
+                "Total Score Raw": eval_res["Score"],
+                "Total Score": f"{eval_res['Score']} / 100 pts",
                 "Price_Raw": eval_res['Close'],
                 "Price": f"${eval_res['Close']:.2f}",
                 "Trend": "✅ Pass" if eval_res["Pass_MA"] else "❌ Fail",
@@ -551,16 +552,15 @@ if st.button("Run Portfolio Screen", type="primary", disabled=not is_points_vali
             t = row["Ticker"]
             if not prior_run.empty and t in prior_run.index:
                 prev_s = prior_run.loc[t, "Total_Score"]
-                diff = int(row["Total Score"] - prev_s)
+                diff = int(row["Total Score Raw"] - prev_s)
                 changes.append(f"{diff:+d} pts" if diff != 0 else "0 pts")
             else:
                 changes.append("New")
         
         res_df.insert(3, "vs Prior Run", changes)
-        res_df = res_df.sort_values(by="Total Score", ascending=False).reset_index(drop=True)
+        res_df = res_df.sort_values(by="Total Score Raw", ascending=False).reset_index(drop=True)
         
-        # Save snapshot after calculating diffs against previous run
-        save_run_snapshot(results)
+        save_run_snapshot([{"Ticker": r["Ticker"], "Total Score": r["Total Score Raw"], "Price_Raw": r["Price_Raw"]} for r in results])
         st.session_state["last_screener_df"] = res_df
     else:
         st.warning("Could not retrieve valid historical data for any provided tickers.")
@@ -569,18 +569,16 @@ if st.button("Run Portfolio Screen", type="primary", disabled=not is_points_vali
 # Display interactive results table
 if "last_screener_df" in st.session_state and not st.session_state["last_screener_df"].empty:
     st.subheader("Portfolio Scoring Matrix")
-    st.caption("💡 Select any row to pop open its detailed Scorecard modal window.")
+    st.caption("💡 Select any row to open its detailed Scorecard modal window.")
 
     screener_df = st.session_state["last_screener_df"]
     
     event = st.dataframe(
-        screener_df.drop(columns=["Price_Raw"]),
+        screener_df.drop(columns=["Price_Raw", "Total Score Raw"]),
         hide_index=True,
         column_config={
-            "Action": st.column_config.TextColumn("Signal", help="🟢 BUY (≥70), 🟡 HOLD (45-69), 🔴 SELL (<45)"),
-            "Total Score": st.column_config.ProgressColumn(
-                "Total Score", format="%d pts", min_value=0, max_value=100
-            ),
+            "Signal": st.column_config.TextColumn("Signal", help="🟢 BUY (≥70 pts) | 🟡 HOLD (45-69 pts) | 🔴 SELL (<45 pts)"),
+            "Total Score": st.column_config.TextColumn("Total Score"),
             "vs Prior Run": st.column_config.TextColumn("vs Prior Run")
         },
         use_container_width=True,
