@@ -3,8 +3,8 @@ app.py
 ======
 Modular ETF Rule Configurator & Scoring Engine (10 Rules)
 Features:
-- Fixed historical run lookup for accurate 'vs Prior Run' tracking.
-- Action Signal Column (🟢 BUY / 🟡 HOLD / 🔴 SELL) based on score bands.
+- Fixed historical run lookup for accurate 'vs Prior Run' tracking across days/runs.
+- Action Signal Column (🟢 BUY / 🟡 HOLD / 🔴 SELL) and dedicated Recommendation column.
 - Dynamic Buy/Hold/Sell action banner inside the Modal Scorecard.
 """
 
@@ -82,7 +82,7 @@ def save_run_snapshot(results: list):
         new_df.to_csv(SNAPSHOT_FILE, index=False)
 
 def get_previous_run_data() -> pd.DataFrame:
-    """Retrieves the immediately preceding run from snapshot history."""
+    """Retrieves the most recent prior execution batch before the current run."""
     if not os.path.exists(SNAPSHOT_FILE):
         return pd.DataFrame()
     
@@ -91,13 +91,22 @@ def get_previous_run_data() -> pd.DataFrame:
         if df.empty or "Run_Timestamp" not in df.columns:
             return pd.DataFrame()
         
-        timestamps = df["Run_Timestamp"].unique()
-        if len(timestamps) < 2:
-            return pd.DataFrame()  # Needs at least 2 distinct runs to compare
+        # Get unique historical timestamps sorted chronologically
+        timestamps = sorted(df["Run_Timestamp"].dropna().unique())
         
-        previous_timestamp = timestamps[-2]
-        prior_df = df[df["Run_Timestamp"] == previous_timestamp]
-        return prior_df.set_index("Ticker")
+        # If there are 2 or more distinct execution batches in history,
+        # return the second-to-last one (the most recent prior batch).
+        if len(timestamps) >= 2:
+            prev_timestamp = timestamps[-2]
+            prior_df = df[df["Run_Timestamp"] == prev_timestamp]
+            return prior_df.set_index("Ticker")
+        
+        # If there's only 1 timestamp batch in CSV, return it directly
+        elif len(timestamps) == 1:
+            prior_df = df[df["Run_Timestamp"] == timestamps[0]]
+            return prior_df.set_index("Ticker")
+            
+        return pd.DataFrame()
     except Exception:
         return pd.DataFrame()
 
