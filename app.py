@@ -3,10 +3,10 @@ app.py
 ======
 Modular ETF Rule Configurator & Scoring Engine (10 Rules)
 Features:
-- Configurator in Sidebar (⚙️ icon).
+- Configurator in Sidebar (⚙️ icon) to edit rules and point weights.
 - Exchange/Market mapping column included in results.
 - Portfolio screen table displays Score as numeric value and uses Signal icons for Buy/Hold/Sell.
-- Modal Scorecard maintains detailed technical breakdown and Action Signal banner.
+- Interactive Scorecard Modal Window on row selection detailing full technical breakdown.
 """
 
 import os
@@ -67,7 +67,7 @@ def save_run_snapshot(results: list):
         records.append({
             "Run_Timestamp": run_timestamp,
             "Ticker": r["Ticker"],
-            "Total_Score": r["Total Score"],
+            "Total_Score": r["Total Score Raw"],
             "Price": r["Price_Raw"]
         })
     
@@ -316,7 +316,7 @@ def evaluate_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
         f"**Expected Range:** ≤ 2.5%."
     )
 
-    # Calculate Total
+    # Calculate Total Points
     total_score = 0
     if rule_ma_passed: total_score += params["weight_ma"]
     if rule_perf_passed: total_score += params["weight_perf"]
@@ -351,7 +351,7 @@ def evaluate_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
 
 @st.dialog("🔍 Scorecard Breakdown", width="large")
 def show_scorecard_modal(ticker: str, benchmark_df: pd.DataFrame, params: dict):
-    """Renders ETF Scorecard with full signal analysis in a modal."""
+    """Renders ETF Scorecard with full signal analysis in a modal dialog."""
     st.subheader(f"Scorecard: {ticker}")
 
     with st.spinner(f"Analyzing {ticker}..."):
@@ -489,7 +489,7 @@ with st.sidebar:
         st.error(f"⚠️ Total is **{total_raw_points} pts** ({action_str}).")
 
 
-# Extract active weights
+# Extract active weights for execution
 weights = edited_df["My Weight"].tolist()
 RULE_PARAMS = {
     "ema_fast": 20, "ema_slow": 50, "weight_ma": int(weights[0]),
@@ -577,7 +577,7 @@ if st.button("Run Portfolio Screen", type="primary", disabled=not is_points_vali
         res_df.insert(4, "vs Prior Run", changes)
         res_df = res_df.sort_values(by="Total Score Raw", ascending=False).reset_index(drop=True)
         
-        save_run_snapshot([{"Ticker": r["Ticker"], "Total Score": r["Total Score Raw"], "Price_Raw": r["Price_Raw"]} for r in results])
+        save_run_snapshot(results)
         st.session_state["last_screener_df"] = res_df
     else:
         st.warning("Could not retrieve valid historical data for any provided tickers.")
@@ -590,8 +590,11 @@ if "last_screener_df" in st.session_state and not st.session_state["last_screene
 
     screener_df = st.session_state["last_screener_df"]
     
+    # Safely prepare dataframe for table display while preserving internal keys
+    display_cols = [c for c in screener_df.columns if c not in ["Price_Raw", "Total Score Raw"]]
+    
     event = st.dataframe(
-        screener_df.drop(columns=["Price_Raw", "Total Score Raw"]),
+        screener_df[display_cols],
         hide_index=True,
         column_config={
             "Market": st.column_config.TextColumn("Market"),
@@ -604,7 +607,7 @@ if "last_screener_df" in st.session_state and not st.session_state["last_screene
         selection_mode="single-row"
     )
 
-    # Open Modal Window on Table Click Selection
+    # Open Modal Window on Table Row Click
     if event and event.selection and event.selection.rows:
         selected_index = event.selection.rows[0]
         selected_ticker = screener_df.iloc[selected_index]["Ticker"]
