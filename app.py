@@ -3,9 +3,9 @@ app.py
 ======
 Modular ETF Rule Configurator & Scoring Engine (10 Rules)
 Fixes:
-- Hard 5-second process timeout on yfinance calls to prevent startup hang.
-- Lazy loads benchmark data only when screening is actively executed.
-- Decoupled st.dataframe selection state to prevent infinite UI rerun loops.
+- Cleaned all non-breaking unicode spaces (\u00a0) causing Python parser hangs.
+- Preserved strict thread timeout safety on yfinance data retrieval.
+- Retained modal scorecard window via @st.dialog.
 """
 
 import os
@@ -618,10 +618,13 @@ if "last_screener_df" in st.session_state and not st.session_state["last_screene
         key="portfolio_matrix_table"
     )
 
-    if event and event.selection and event.selection.rows:
-        selected_index = event.selection.rows[0]
-        selected_ticker = screener_df.iloc[selected_index]["Ticker"]
-        st.session_state["selected_ticker_modal"] = selected_ticker
+    # Safely handle single row selection trigger
+    if event and hasattr(event, "selection") and event.selection:
+        rows = getattr(event.selection, "rows", [])
+        if rows:
+            selected_index = rows[0]
+            selected_ticker = screener_df.iloc[selected_index]["Ticker"]
+            st.session_state["selected_ticker_modal"] = selected_ticker
 
 # Render Dialog cleanly when active
 if st.session_state.get("selected_ticker_modal"):
