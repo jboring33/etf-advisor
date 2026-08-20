@@ -4,6 +4,7 @@ app.py
 Modular ETF Rule Configurator & Scoring Engine (10 Rules)
 Features:
 - Configurator in Sidebar (⚙️ icon).
+- Exchange/Market mapping column included in results.
 - Portfolio screen table displays Score as numeric value and uses Signal icons for Buy/Hold/Sell.
 - Modal Scorecard maintains detailed technical breakdown and Action Signal banner.
 """
@@ -107,27 +108,42 @@ def get_previous_run_data() -> pd.DataFrame:
 # ==============================================================================
 
 @st.cache_data(ttl=1800, show_spinner=False)
-def fetch_etf_history(ticker: str) -> pd.DataFrame:
-    """Fetches 1 year of daily price history using yfinance."""
+def fetch_etf_history(ticker: str) -> tuple[pd.DataFrame, str]:
+    """Fetches 1 year of daily price history and exchange/market information."""
     ticker_clean = ticker.strip().upper()
+    market_name = "N/A"
+    df_out = pd.DataFrame()
+    
     try:
-        df = yf.download(
-            ticker_clean,
-            period="1y",
-            progress=False,
-            auto_adjust=True,
-            threads=False,
-            ignore_tz=True
-        )
+        ticker_obj = yf.Ticker(ticker_clean)
+        
+        # Retrieve primary exchange/market metadata
+        info = ticker_obj.fast_info
+        raw_exchange = getattr(info, "exchange", None)
+        
+        if raw_exchange:
+            market_map = {
+                "NMS": "NASDAQ",
+                "NGM": "NASDAQ",
+                "NCM": "NASDAQ",
+                "PCX": "NYSE Arca",
+                "NYQ": "NYSE",
+                "ASE": "NYSE American",
+                "BTS": "BATS"
+            }
+            market_name = market_map.get(raw_exchange, raw_exchange)
+
+        df = ticker_obj.history(period="1y", auto_adjust=True)
         if df is not None and not df.empty:
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
             df = df.loc[:, ~df.columns.duplicated()]
             if "Close" in df.columns and len(df) > 30:
-                return df.dropna(subset=["Close"]).reset_index()
+                df_out = df.dropna(subset=["Close"]).reset_index()
     except Exception:
         pass
-    return pd.DataFrame()
+        
+    return df_out, market_name
 
 
 # ==============================================================================
@@ -339,7 +355,7 @@ def show_scorecard_modal(ticker: str, benchmark_df: pd.DataFrame, params: dict):
     st.subheader(f"Scorecard: {ticker}")
 
     with st.spinner(f"Analyzing {ticker}..."):
-        df = fetch_etf_history(ticker)
+        df, market = fetch_etf_history(ticker)
         res = evaluate_rules(df, benchmark_df, params)
 
     if res is not None:
@@ -355,7 +371,7 @@ def show_scorecard_modal(ticker: str, benchmark_df: pd.DataFrame, params: dict):
         c_metric1, c_metric2 = st.columns([1, 1])
         with c_metric1:
             st.metric(
-                label=f"Composite Score for {ticker}",
+                label=f"Composite Score for {ticker} ({market})",
                 value=f"{res['Score']} / 100 Points",
                 delta=delta_str
             )
@@ -495,7 +511,7 @@ RULE_PARAMS = {
 
 st.title("🎯 Portfolio ETF Screener & Analysis")
 
-benchmark_df = fetch_etf_history("SPY")
+benchmark_df, _ = fetch_etf_history("SPY")
 
 if not is_points_valid:
     st.error(f"⚠️ Points allocation total is currently {total_raw_points} pts. Please balance weights to 100 in the ⚙️ Sidebar Configurator.")
@@ -515,13 +531,14 @@ if st.button("Run Portfolio Screen", type="primary", disabled=not is_points_vali
     progress_bar = st.progress(0)
     
     for idx, ticker in enumerate(tickers_list):
-        df = fetch_etf_history(ticker)
+        df, market = fetch_etf_history(ticker)
         eval_res = evaluate_rules(df, benchmark_df, RULE_PARAMS)
         
         if eval_res is not None:
             action_sig, _, _ = derive_action_signal(eval_res["Score"])
             results.append({
                 "Ticker": ticker,
+                "Market": market,
                 "Signal": action_sig,
                 "Total Score Raw": eval_res["Score"],
                 "Total Score": f"{eval_res['Score']} / 100 pts",
@@ -557,7 +574,7 @@ if st.button("Run Portfolio Screen", type="primary", disabled=not is_points_vali
             else:
                 changes.append("New")
         
-        res_df.insert(3, "vs Prior Run", changes)
+        res_df.insert(4, "vs Prior Run", changes)
         res_df = res_df.sort_values(by="Total Score Raw", ascending=False).reset_index(drop=True)
         
         save_run_snapshot([{"Ticker": r["Ticker"], "Total Score": r["Total Score Raw"], "Price_Raw": r["Price_Raw"]} for r in results])
@@ -577,6 +594,7 @@ if "last_screener_df" in st.session_state and not st.session_state["last_screene
         screener_df.drop(columns=["Price_Raw", "Total Score Raw"]),
         hide_index=True,
         column_config={
+            "Market": st.column_config.TextColumn("Market"),
             "Signal": st.column_config.TextColumn("Signal", help="🟢 BUY (≥70 pts) | 🟡 HOLD (45-69 pts) | 🔴 SELL (<45 pts)"),
             "Total Score": st.column_config.TextColumn("Total Score"),
             "vs Prior Run": st.column_config.TextColumn("vs Prior Run")
