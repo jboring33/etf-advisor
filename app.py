@@ -3,6 +3,7 @@ app.py
 ======
 Modular ETF Rule Configurator & Scoring Engine (10 Rules)
 Features:
+- Includes Exchange information for each ticker via yfinance metadata.
 - Completely user-managed persistent ticker list across reboots and sessions.
 - Clean scoring engine with direct Action Signals (🟢 BUY / 🟡 HOLD / 🔴 SELL).
 - Dynamic Buy/Hold/Sell action banner inside the Modal Scorecard.
@@ -102,6 +103,18 @@ def fetch_etf_history(ticker: str) -> pd.DataFrame:
     except Exception:
         pass
     return pd.DataFrame()
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def fetch_ticker_exchange(ticker: str) -> str:
+    """Fetches primary exchange for ticker symbol."""
+    ticker_clean = ticker.strip().upper()
+    try:
+        t_obj = yf.Ticker(ticker_clean)
+        info = t_obj.info
+        exchange = info.get("exchange") or info.get("fullExchangeName") or "N/A"
+        return str(exchange).upper()
+    except Exception:
+        return "N/A"
 
 
 # ==============================================================================
@@ -310,7 +323,8 @@ def evaluate_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
 @st.dialog("🔍 Scorecard Breakdown", width="large")
 def show_scorecard_modal(ticker: str, benchmark_df: pd.DataFrame, params: dict):
     """Renders the ETF Scorecard with Buy/Hold/Sell banner inside a popup modal."""
-    st.subheader(f"Scorecard: {ticker}")
+    exchange_name = fetch_ticker_exchange(ticker)
+    st.subheader(f"Scorecard: {ticker} ({exchange_name})")
 
     with st.spinner(f"Analyzing {ticker}..."):
         df = fetch_etf_history(ticker)
@@ -488,11 +502,13 @@ if st.button("Run Portfolio Screen", type="primary", disabled=not is_points_vali
     for idx, ticker in enumerate(tickers_list):
         df = fetch_etf_history(ticker)
         eval_res = evaluate_rules(df, benchmark_df, RULE_PARAMS)
+        exchange = fetch_ticker_exchange(ticker)
         
         if eval_res is not None:
             action_sig, _, _ = derive_action_signal(eval_res["Score"])
             results.append({
                 "Ticker": ticker,
+                "Exchange": exchange,
                 "Action": action_sig,
                 "Total Score": eval_res["Score"],
                 "Price_Raw": eval_res['Close'],
@@ -532,6 +548,8 @@ if "last_screener_df" in st.session_state and not st.session_state["last_screene
         screener_df.drop(columns=["Price_Raw"]),
         hide_index=True,
         column_config={
+            "Ticker": st.column_config.TextColumn("Ticker"),
+            "Exchange": st.column_config.TextColumn("Exchange"),
             "Action": st.column_config.TextColumn("Signal", help="🟢 BUY (≥70), 🟡 HOLD (45-69), 🔴 SELL (<45)"),
             "Total Score": st.column_config.NumberColumn(
                 "Total Score", format="%d pts"
