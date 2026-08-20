@@ -3,7 +3,7 @@ app.py
 ======
 Modular ETF Rule Configurator & Scoring Engine (10 Rules)
 Features:
-- Persistent ticker list saved across reboots and sessions.
+- Completely user-managed persistent ticker list across reboots and sessions.
 - Clean scoring engine with direct Action Signals (🟢 BUY / 🟡 HOLD / 🔴 SELL).
 - Dynamic Buy/Hold/Sell action banner inside the Modal Scorecard.
 """
@@ -15,7 +15,6 @@ import numpy as np
 import yfinance as yf
 
 TICKERS_FILE = "saved_tickers.txt"
-DEFAULT_TICKERS = "VFLO, SCHD, SCYB, JPST, JAAA, VEA, DIVI, EMXC, SMH, XLK, QQQ, SPY"
 
 # Page setup
 st.set_page_config(
@@ -42,16 +41,14 @@ st.markdown("""
 # ==============================================================================
 
 def load_saved_tickers() -> str:
-    """Loads saved tickers from local file or returns defaults."""
+    """Loads saved tickers from local file or returns an empty string."""
     if os.path.exists(TICKERS_FILE):
         try:
             with open(TICKERS_FILE, "r") as f:
-                content = f.read().strip()
-                if content:
-                    return content
+                return f.read().strip()
         except Exception:
             pass
-    return DEFAULT_TICKERS
+    return ""
 
 def save_tickers_to_disk(tickers_str: str):
     """Saves edited ticker string to local file to persist across reboots."""
@@ -473,6 +470,7 @@ user_input = st.text_area(
     "Enter ETF Tickers (comma or space separated):",
     value=st.session_state["user_tickers"],
     height=100,
+    placeholder="e.g. VFLO, SCHD, SCYB, JPST, JAAA, VEA, DIVI, EMXC",
     key="ticker_input_field"
 )
 
@@ -483,7 +481,7 @@ if user_input != st.session_state["user_tickers"]:
 
 tickers_list = [t.strip().upper() for t in user_input.replace("\n", ",").split(",") if t.strip()]
 
-if st.button("Run Portfolio Screen", type="primary", disabled=not is_points_valid):
+if st.button("Run Portfolio Screen", type="primary", disabled=not is_points_valid or not tickers_list):
     results = []
     progress_bar = st.progress(0)
     
