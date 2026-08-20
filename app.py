@@ -157,14 +157,14 @@ def calculate_atr_ratio(df: pd.DataFrame, period: int = 14) -> float:
     latest_close = close.iloc[-1]
     return float((atr / latest_close) * 100) if latest_close > 0 else 0.0
 
-def derive_action_signal(score: int) -> tuple[str, str, str]:
+def derive_action_signal(score: int) -> tuple[str, str, str, str]:
     """Generates a Buy, Hold, or Sell signal based on total score."""
     if score >= 70:
-        return "🟢 BUY", "success", "Strong institutional alignment and multi-factor momentum. Favorable candidate for fresh capital allocation."
+        return "🟢 BUY", "BUY", "success", "Strong institutional alignment and multi-factor momentum. Favorable candidate for fresh capital allocation."
     elif score >= 45:
-        return "🟡 HOLD", "warning", "Neutral performance or consolidation phase. Maintain existing exposure but await further breakout confirmation before adding."
+        return "🟡 HOLD", "HOLD", "warning", "Neutral performance or consolidation phase. Maintain existing exposure but await further breakout confirmation before adding."
     else:
-        return "🔴 SELL", "error", "Technical metrics indicate lagging momentum, elevated drawdown, or capital outflow. Consider trimming or reallocating."
+        return "🔴 SELL", "SELL", "error", "Technical metrics indicate lagging momentum, elevated drawdown, or capital outflow. Consider trimming or reallocating."
 
 def evaluate_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
     if df.empty or len(df) < params["ema_slow"]:
@@ -350,7 +350,7 @@ def show_scorecard_modal(ticker: str, benchmark_df: pd.DataFrame, params: dict):
             diff = int(res["Score"] - prev_score)
             delta_str = f"{diff:+d} pts vs prior run"
 
-        action_label, action_type, action_desc = derive_action_signal(res["Score"])
+        action_label, rec_text, action_type, action_desc = derive_action_signal(res["Score"])
 
         c_metric1, c_metric2 = st.columns([1, 1])
         with c_metric1:
@@ -519,10 +519,11 @@ if st.button("Run Portfolio Screen", type="primary", disabled=not is_points_vali
         eval_res = evaluate_rules(df, benchmark_df, RULE_PARAMS)
         
         if eval_res is not None:
-            action_sig, _, _ = derive_action_signal(eval_res["Score"])
+            action_sig, rec_text, _, _ = derive_action_signal(eval_res["Score"])
             results.append({
                 "Ticker": ticker,
                 "Action": action_sig,
+                "Recommendation": rec_text,
                 "Total Score": eval_res["Score"],
                 "Price_Raw": eval_res['Close'],
                 "Price": f"${eval_res['Close']:.2f}",
@@ -556,7 +557,7 @@ if st.button("Run Portfolio Screen", type="primary", disabled=not is_points_vali
             else:
                 changes.append("New")
         
-        res_df.insert(3, "vs Prior Run", changes)
+        res_df.insert(4, "vs Prior Run", changes)
         res_df = res_df.sort_values(by="Total Score", ascending=False).reset_index(drop=True)
         
         # Save snapshot after calculating diffs against previous run
@@ -578,8 +579,9 @@ if "last_screener_df" in st.session_state and not st.session_state["last_screene
         hide_index=True,
         column_config={
             "Action": st.column_config.TextColumn("Signal", help="🟢 BUY (≥70), 🟡 HOLD (45-69), 🔴 SELL (<45)"),
-            "Total Score": st.column_config.ProgressColumn(
-                "Total Score", format="%d pts", min_value=0, max_value=100
+            "Recommendation": st.column_config.TextColumn("Recommendation"),
+            "Total Score": st.column_config.NumberColumn(
+                "Total Score", format="%d pts"
             ),
             "vs Prior Run": st.column_config.TextColumn("vs Prior Run")
         },
