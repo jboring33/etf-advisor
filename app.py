@@ -58,6 +58,31 @@ if "config_df_v2" not in st.session_state:
         {"Rule #": "Rule 10", "Rule Name": "ATR Volatility Squeeze", "My Weight": 5},
     ])
 
+def get_previous_run_data() -> pd.DataFrame:
+    """Retrieves the latest execution batch stored in the CSV prior to a new run."""
+    if not os.path.exists(SNAPSHOT_FILE):
+        return pd.DataFrame()
+    
+    try:
+        df = pd.read_csv(SNAPSHOT_FILE)
+        if df.empty or "Run_Timestamp" not in df.columns:
+            return pd.DataFrame()
+        
+        # Extract unique timestamps sorted in ascending order
+        timestamps = sorted(df["Run_Timestamp"].dropna().unique())
+        
+        if len(timestamps) > 0:
+            # Grab the absolute latest snapshot execution available in file
+            latest_timestamp = timestamps[-1]
+            prior_df = df[df["Run_Timestamp"] == latest_timestamp].copy()
+            # Handle potential duplicate ticker entries in the same batch by taking the last entry
+            prior_df = prior_df.drop_duplicates(subset=["Ticker"], keep="last")
+            return prior_df.set_index("Ticker")
+            
+        return pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
+
 def save_run_snapshot(results: list):
     """Saves every execution with a timestamp to enable historical comparison."""
     run_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -80,35 +105,6 @@ def save_run_snapshot(results: list):
             new_df.to_csv(SNAPSHOT_FILE, index=False)
     else:
         new_df.to_csv(SNAPSHOT_FILE, index=False)
-
-def get_previous_run_data() -> pd.DataFrame:
-    """Retrieves the most recent prior execution batch before the current run."""
-    if not os.path.exists(SNAPSHOT_FILE):
-        return pd.DataFrame()
-    
-    try:
-        df = pd.read_csv(SNAPSHOT_FILE)
-        if df.empty or "Run_Timestamp" not in df.columns:
-            return pd.DataFrame()
-        
-        # Get unique historical timestamps sorted chronologically
-        timestamps = sorted(df["Run_Timestamp"].dropna().unique())
-        
-        # If there are 2 or more distinct execution batches in history,
-        # return the second-to-last one (the most recent prior batch).
-        if len(timestamps) >= 2:
-            prev_timestamp = timestamps[-2]
-            prior_df = df[df["Run_Timestamp"] == prev_timestamp]
-            return prior_df.set_index("Ticker")
-        
-        # If there's only 1 timestamp batch in CSV, return it directly
-        elif len(timestamps) == 1:
-            prior_df = df[df["Run_Timestamp"] == timestamps[0]]
-            return prior_df.set_index("Ticker")
-            
-        return pd.DataFrame()
-    except Exception:
-        return pd.DataFrame()
 
 
 # ==============================================================================
@@ -520,6 +516,9 @@ st.session_state["user_tickers"] = user_input
 tickers_list = [t.strip().upper() for t in user_input.replace("\n", ",").split(",") if t.strip()]
 
 if st.button("Run Portfolio Screen", type="primary", disabled=not is_points_valid):
+    # CRITICAL: Retrieve prior snapshot before saving current run snapshot
+    prior_run = get_previous_run_data()
+
     results = []
     progress_bar = st.progress(0)
     
@@ -553,8 +552,6 @@ if st.button("Run Portfolio Screen", type="primary", disabled=not is_points_vali
     progress_bar.empty()
 
     if results:
-        prior_run = get_previous_run_data()
-        
         res_df = pd.DataFrame(results)
         changes = []
         for _, row in res_df.iterrows():
@@ -569,7 +566,7 @@ if st.button("Run Portfolio Screen", type="primary", disabled=not is_points_vali
         res_df.insert(4, "vs Prior Run", changes)
         res_df = res_df.sort_values(by="Total Score", ascending=False).reset_index(drop=True)
         
-        # Save snapshot after calculating diffs against previous run
+        # Save snapshot ONLY AFTER diffs have been computed against the prior run
         save_run_snapshot(results)
         st.session_state["last_screener_df"] = res_df
     else:
