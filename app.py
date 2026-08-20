@@ -3,19 +3,19 @@ app.py
 ======
 Modular ETF Rule Configurator & Scoring Engine (10 Rules)
 Features:
-- Fixed historical run lookup for accurate 'vs Prior Run' tracking across days/runs.
-- Action Signal Column (🟢 BUY / 🟡 HOLD / 🔴 SELL) and dedicated Recommendation column.
+- Persistent ticker list saved across reboots and sessions.
+- Clean scoring engine with direct Action Signals (🟢 BUY / 🟡 HOLD / 🔴 SELL).
 - Dynamic Buy/Hold/Sell action banner inside the Modal Scorecard.
 """
 
 import os
-from datetime import datetime
-import streamlit as st
+import Streamlit as st
 import pandas as pd
 import numpy as np
 import yfinance as yf
 
-SNAPSHOT_FILE = "weekly_runs.csv"
+TICKERS_FILE = "saved_tickers.txt"
+DEFAULT_TICKERS = "VFLO, SCHD, SCYB, JPST, JAAA, VEA, DIVI, EMXC, SMH, XLK, QQQ, SPY"
 
 # Page setup
 st.set_page_config(
@@ -38,11 +38,31 @@ st.markdown("""
 
 
 # ==============================================================================
-# SESSION STATE & HISTORICAL STORAGE ENGINE
+# PERSISTENCE & SESSION STATE
 # ==============================================================================
 
+def load_saved_tickers() -> str:
+    """Loads saved tickers from local file or returns defaults."""
+    if os.path.exists(TICKERS_FILE):
+        try:
+            with open(TICKERS_FILE, "r") as f:
+                content = f.read().strip()
+                if content:
+                    return content
+        except Exception:
+            pass
+    return DEFAULT_TICKERS
+
+def save_tickers_to_disk(tickers_str: str):
+    """Saves edited ticker string to local file to persist across reboots."""
+    try:
+        with open(TICKERS_FILE, "w") as f:
+            f.write(tickers_str)
+    except Exception:
+        pass
+
 if "user_tickers" not in st.session_state:
-    st.session_state["user_tickers"] = "VFLO, SCHD, SCYB, JPST, JAAA, VEA, DIVI, EMXC, SMH, XLK, QQQ, SPY"
+    st.session_state["user_tickers"] = load_saved_tickers()
 
 if "config_df_v2" not in st.session_state:
     st.session_state["config_df_v2"] = pd.DataFrame([
@@ -57,54 +77,6 @@ if "config_df_v2" not in st.session_state:
         {"Rule #": "Rule 9", "Rule Name": "Sharpe Ratio Filter", "My Weight": 15},
         {"Rule #": "Rule 10", "Rule Name": "ATR Volatility Squeeze", "My Weight": 5},
     ])
-
-def get_previous_run_data() -> pd.DataFrame:
-    """Retrieves the latest execution batch stored in the CSV prior to a new run."""
-    if not os.path.exists(SNAPSHOT_FILE):
-        return pd.DataFrame()
-    
-    try:
-        df = pd.read_csv(SNAPSHOT_FILE)
-        if df.empty or "Run_Timestamp" not in df.columns:
-            return pd.DataFrame()
-        
-        # Extract unique timestamps sorted in ascending order
-        timestamps = sorted(df["Run_Timestamp"].dropna().unique())
-        
-        if len(timestamps) > 0:
-            # Grab the absolute latest snapshot execution available in file
-            latest_timestamp = timestamps[-1]
-            prior_df = df[df["Run_Timestamp"] == latest_timestamp].copy()
-            # Handle potential duplicate ticker entries in the same batch by taking the last entry
-            prior_df = prior_df.drop_duplicates(subset=["Ticker"], keep="last")
-            return prior_df.set_index("Ticker")
-            
-        return pd.DataFrame()
-    except Exception:
-        return pd.DataFrame()
-
-def save_run_snapshot(results: list):
-    """Saves every execution with a timestamp to enable historical comparison."""
-    run_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    records = []
-    for r in results:
-        records.append({
-            "Run_Timestamp": run_timestamp,
-            "Ticker": r["Ticker"],
-            "Total_Score": r["Total Score"],
-            "Price": r["Price_Raw"]
-        })
-    
-    new_df = pd.DataFrame(records)
-    if os.path.exists(SNAPSHOT_FILE):
-        try:
-            existing_df = pd.read_csv(SNAPSHOT_FILE)
-            combined_df = pd.concat([existing_df, new_df], ignore_index=True)
-            combined_df.to_csv(SNAPSHOT_FILE, index=False)
-        except Exception:
-            new_df.to_csv(SNAPSHOT_FILE, index=False)
-    else:
-        new_df.to_csv(SNAPSHOT_FILE, index=False)
 
 
 # ==============================================================================
@@ -162,14 +134,14 @@ def calculate_atr_ratio(df: pd.DataFrame, period: int = 14) -> float:
     latest_close = close.iloc[-1]
     return float((atr / latest_close) * 100) if latest_close > 0 else 0.0
 
-def derive_action_signal(score: int) -> tuple[str, str, str, str]:
+def derive_action_signal(score: int) -> tuple[str, str, str]:
     """Generates a Buy, Hold, or Sell signal based on total score."""
     if score >= 70:
-        return "🟢 BUY", "BUY", "success", "Strong institutional alignment and multi-factor momentum. Favorable candidate for fresh capital allocation."
+        return "🟢 BUY", "success", "Strong institutional alignment and multi-factor momentum. Favorable candidate for fresh capital allocation."
     elif score >= 45:
-        return "🟡 HOLD", "HOLD", "warning", "Neutral performance or consolidation phase. Maintain existing exposure but await further breakout confirmation before adding."
+        return "🟡 HOLD", "warning", "Neutral performance or consolidation phase. Maintain existing exposure but await further breakout confirmation before adding."
     else:
-        return "🔴 SELL", "SELL", "error", "Technical metrics indicate lagging momentum, elevated drawdown, or capital outflow. Consider trimming or reallocating."
+        return "🔴 SELL", "error", "Technical metrics indicate lagging momentum, elevated drawdown, or capital outflow. Consider trimming or reallocating."
 
 def evaluate_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
     if df.empty or len(df) < params["ema_slow"]:
@@ -348,21 +320,13 @@ def show_scorecard_modal(ticker: str, benchmark_df: pd.DataFrame, params: dict):
         res = evaluate_rules(df, benchmark_df, params)
 
     if res is not None:
-        prior_run = get_previous_run_data()
-        delta_str = None
-        if not prior_run.empty and ticker in prior_run.index:
-            prev_score = prior_run.loc[ticker, "Total_Score"]
-            diff = int(res["Score"] - prev_score)
-            delta_str = f"{diff:+d} pts vs prior run"
-
-        action_label, rec_text, action_type, action_desc = derive_action_signal(res["Score"])
+        action_label, action_type, action_desc = derive_action_signal(res["Score"])
 
         c_metric1, c_metric2 = st.columns([1, 1])
         with c_metric1:
             st.metric(
                 label=f"Composite Score for {ticker}",
-                value=f"{res['Score']} / 100 Points",
-                delta=delta_str
+                value=f"{res['Score']} / 100 Points"
             )
         with c_metric2:
             if action_type == "success":
@@ -512,13 +476,14 @@ user_input = st.text_area(
     key="ticker_input_field"
 )
 
-st.session_state["user_tickers"] = user_input
+# Detect change in input text area, update state, and save locally
+if user_input != st.session_state["user_tickers"]:
+    st.session_state["user_tickers"] = user_input
+    save_tickers_to_disk(user_input)
+
 tickers_list = [t.strip().upper() for t in user_input.replace("\n", ",").split(",") if t.strip()]
 
 if st.button("Run Portfolio Screen", type="primary", disabled=not is_points_valid):
-    # CRITICAL: Retrieve prior snapshot before saving current run snapshot
-    prior_run = get_previous_run_data()
-
     results = []
     progress_bar = st.progress(0)
     
@@ -527,11 +492,10 @@ if st.button("Run Portfolio Screen", type="primary", disabled=not is_points_vali
         eval_res = evaluate_rules(df, benchmark_df, RULE_PARAMS)
         
         if eval_res is not None:
-            action_sig, rec_text, _, _ = derive_action_signal(eval_res["Score"])
+            action_sig, _, _ = derive_action_signal(eval_res["Score"])
             results.append({
                 "Ticker": ticker,
                 "Action": action_sig,
-                "Recommendation": rec_text,
                 "Total Score": eval_res["Score"],
                 "Price_Raw": eval_res['Close'],
                 "Price": f"${eval_res['Close']:.2f}",
@@ -553,21 +517,7 @@ if st.button("Run Portfolio Screen", type="primary", disabled=not is_points_vali
 
     if results:
         res_df = pd.DataFrame(results)
-        changes = []
-        for _, row in res_df.iterrows():
-            t = row["Ticker"]
-            if not prior_run.empty and t in prior_run.index:
-                prev_s = prior_run.loc[t, "Total_Score"]
-                diff = int(row["Total Score"] - prev_s)
-                changes.append(f"{diff:+d} pts" if diff != 0 else "0 pts")
-            else:
-                changes.append("New")
-        
-        res_df.insert(4, "vs Prior Run", changes)
         res_df = res_df.sort_values(by="Total Score", ascending=False).reset_index(drop=True)
-        
-        # Save snapshot ONLY AFTER diffs have been computed against the prior run
-        save_run_snapshot(results)
         st.session_state["last_screener_df"] = res_df
     else:
         st.warning("Could not retrieve valid historical data for any provided tickers.")
@@ -585,11 +535,9 @@ if "last_screener_df" in st.session_state and not st.session_state["last_screene
         hide_index=True,
         column_config={
             "Action": st.column_config.TextColumn("Signal", help="🟢 BUY (≥70), 🟡 HOLD (45-69), 🔴 SELL (<45)"),
-            "Recommendation": st.column_config.TextColumn("Recommendation"),
             "Total Score": st.column_config.NumberColumn(
                 "Total Score", format="%d pts"
-            ),
-            "vs Prior Run": st.column_config.TextColumn("vs Prior Run")
+            )
         },
         use_container_width=True,
         on_select="rerun",
