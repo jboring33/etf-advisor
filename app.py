@@ -3,9 +3,9 @@ app.py
 ======
 Modular ETF Rule Configurator & Scoring Engine (10 Rules)
 Features:
-- Configurator moved to Sidebar (⚙️ icon menu).
-- Primary screen titled Portfolio.
-- Selecting a ticker opens the Scorecard inside a native Modal Window.
+- Streamlined 3-column Points Configurator [Rule #, Rule Name, My Weight].
+- Run-over-run Delta tracking (+/- pts) even across multiple runs on the same day.
+- Single Symbol Scorecard with detailed live math + strategic commentary & ranges.
 """
 
 import os
@@ -19,7 +19,7 @@ SNAPSHOT_FILE = "weekly_runs.csv"
 
 # Page setup
 st.set_page_config(
-    page_title="Portfolio ETF Screener & Rule Engine",
+    page_title="Custom ETF Screener & Rule Engine",
     page_icon="⚙️",
     layout="wide"
 )
@@ -95,6 +95,7 @@ def get_previous_run_data() -> pd.DataFrame:
         if len(timestamps) < 2:
             return pd.DataFrame()  # Only 1 run exists so far
         
+        # Second to last timestamp represents the prior run
         previous_timestamp = timestamps[-2]
         prior_df = df[df["Run_Timestamp"] == previous_timestamp]
         return prior_df.set_index("Ticker")
@@ -321,121 +322,38 @@ def evaluate_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
 
 
 # ==============================================================================
-# MODAL SCORECARD WINDOW (@st.dialog)
+# MAIN APPLICATION INTERFACE
 # ==============================================================================
 
-@st.dialog("🔍 Scorecard Breakdown", width="large")
-def show_scorecard_modal(ticker: str, benchmark_df: pd.DataFrame, params: dict):
-    """Renders the ETF Scorecard inside a native popup modal window."""
-    st.subheader(f"Scorecard: {ticker}")
+st.title("🎯 Custom ETF Screener & Scoring Engine")
 
-    with st.spinner(f"Analyzing {ticker}..."):
-        df = fetch_etf_history(ticker)
-        res = evaluate_rules(df, benchmark_df, params)
+benchmark_df = fetch_etf_history("SPY")
 
-    if res is not None:
-        prior_run = get_previous_run_data()
-        delta_str = None
-        if not prior_run.empty and ticker in prior_run.index:
-            prev_score = prior_run.loc[ticker, "Total_Score"]
-            diff = int(res["Score"] - prev_score)
-            delta_str = f"{diff:+d} pts vs prior run"
-
-        st.metric(
-            label=f"Composite Score for {ticker}",
-            value=f"{res['Score']} / 100 Points",
-            delta=delta_str
-        )
-
-        st.markdown("---")
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            status_ma = "✅ PASS" if res["Pass_MA"] else "❌ FAIL"
-            pts_ma = params['weight_ma'] if res['Pass_MA'] else 0
-            st.metric("1. Trend Status", status_ma, delta=f"{pts_ma} / {params['weight_ma']} pts")
-            st.info(res["Comm_MA"])
-
-        with c2:
-            status_perf = "✅ PASS" if res["Pass_Perf"] else "❌ FAIL"
-            pts_perf = params['weight_perf'] if res['Pass_Perf'] else 0
-            st.metric("2. Return Status", status_perf, delta=f"{pts_perf} / {params['weight_perf']} pts")
-            st.info(res["Comm_Perf"])
-
-        with c3:
-            status_flow = "✅ PASS" if res["Pass_Flow"] else "❌ FAIL"
-            pts_flow = params['weight_flow'] if res['Pass_Flow'] else 0
-            st.metric("3. Flow Status", status_flow, delta=f"{pts_flow} / {params['weight_flow']} pts")
-            st.info(res["Comm_Flow"])
-
-        st.markdown("---")
-        c4, c5, c6 = st.columns(3)
-        with c4:
-            status_rs = "✅ PASS" if res["Pass_RS"] else "❌ FAIL"
-            pts_rs = params['weight_rs'] if res['Pass_RS'] else 0
-            st.metric("4. Rel Strength", status_rs, delta=f"{pts_rs} / {params['weight_rs']} pts")
-            st.info(res["Comm_RS"])
-
-        with c5:
-            status_vol = "✅ PASS" if res["Pass_VolExp"] else "❌ FAIL"
-            pts_vol = params['weight_vol_exp'] if res['Pass_VolExp'] else 0
-            st.metric("5. Volume Ratio", status_vol, delta=f"{pts_vol} / {params['weight_vol_exp']} pts")
-            st.info(res["Comm_VolExp"])
-
-        with c6:
-            status_dd = "✅ PASS" if res["Pass_DD"] else "❌ FAIL"
-            pts_dd = params['weight_dd'] if res['Pass_DD'] else 0
-            st.metric("6. Max Drawdown", status_dd, delta=f"{pts_dd} / {params['weight_dd']} pts")
-            st.info(res["Comm_DD"])
-
-        st.markdown("---")
-        c7, c8, c9 = st.columns(3)
-        with c7:
-            status_52w = "✅ PASS" if res["Pass_52W"] else "❌ FAIL"
-            pts_52w = params['weight_52w'] if res['Pass_52W'] else 0
-            st.metric("7. 52W Proximity", status_52w, delta=f"{pts_52w} / {params['weight_52w']} pts")
-            st.info(res["Comm_52W"])
-
-        with c8:
-            status_rsi = "✅ PASS" if res["Pass_RSI"] else "❌ FAIL"
-            pts_rsi = params['weight_rsi'] if res['Pass_RSI'] else 0
-            st.metric("8. RSI Band", status_rsi, delta=f"{pts_rsi} / {params['weight_rsi']} pts")
-            st.info(res["Comm_RSI"])
-
-        with c9:
-            status_sharpe = "✅ PASS" if res["Pass_Sharpe"] else "❌ FAIL"
-            pts_sharpe = params['weight_sharpe'] if res['Pass_Sharpe'] else 0
-            st.metric("9. Sharpe Ratio", status_sharpe, delta=f"{pts_sharpe} / {params['weight_sharpe']} pts")
-            st.info(res["Comm_Sharpe"])
-
-        st.markdown("---")
-        c10, _ = st.columns([1, 2])
-        with c10:
-            status_atr = "✅ PASS" if res["Pass_ATR"] else "❌ FAIL"
-            pts_atr = params['weight_atr'] if res['Pass_ATR'] else 0
-            st.metric("10. ATR Volatility", status_atr, delta=f"{pts_atr} / {params['weight_atr']} pts")
-            st.info(res["Comm_ATR"])
-    else:
-        st.error(f"Could not retrieve sufficient historical data for '{ticker}'.")
+# Navigation Tabs
+tab_config, tab_screen, tab_single = st.tabs([
+    "⚙️ Points Configurator",
+    "📊 Batch Universe Screener",
+    "🔍 Single Symbol Scorecard"
+])
 
 
 # ==============================================================================
-# SIDEBAR: POINTS CONFIGURATOR (⚙️)
+# TAB 1: POINTS CONFIGURATOR
 # ==============================================================================
-
-with st.sidebar:
-    st.header("⚙️ Points Configurator")
-    st.caption("Adjust weight allocations across rules (Must sum to 100).")
-
+with tab_config:
+    st.subheader("Rule Weight Allocation")
+    
     edited_df = st.data_editor(
         st.session_state["config_df_v2"],
         hide_index=True,
-        use_container_width=True,
+        use_container_width=False,
+        width=500,
         column_config={
             "Rule #": st.column_config.TextColumn("Rule #", disabled=True),
             "Rule Name": st.column_config.TextColumn("Rule Name", disabled=True),
             "My Weight": st.column_config.NumberColumn("My Weight", min_value=0, max_value=100, step=1, format="%d")
         },
-        key="rule_weights_editor_sidebar"
+        key="rule_weights_editor_v2"
     )
 
     st.session_state["config_df_v2"] = edited_df
@@ -443,17 +361,17 @@ with st.sidebar:
     total_raw_points = int(edited_df["My Weight"].sum())
     is_points_valid = (total_raw_points == 100)
 
-    st.markdown(f"### **Total Points:** `{total_raw_points}`")
+    st.markdown(f"### **Total:** `{total_raw_points}`")
 
     if is_points_valid:
-        st.success("✅ **Weight total equals 100 pts.**")
+        st.success("✅ **Total weight equals 100 points.**")
     else:
         diff = 100 - total_raw_points
         action_str = f"Add {diff} pts" if diff > 0 else f"Subtract {abs(diff)} pts"
-        st.error(f"⚠️ Total is **{total_raw_points} pts** ({action_str}).")
+        st.error(f"⚠️ Current total is **{total_raw_points} pts**. Adjust weights to reach **100** ({action_str}).")
 
 
-# Extract active weights
+# Extract weights directly
 weights = edited_df["My Weight"].tolist()
 RULE_PARAMS = {
     "ema_fast": 20, "ema_slow": 50, "weight_ma": int(weights[0]),
@@ -470,101 +388,184 @@ RULE_PARAMS = {
 
 
 # ==============================================================================
-# MAIN INTERFACE: PORTFOLIO SCREENER
+# TAB 2: BATCH UNIVERSE SCREENER
 # ==============================================================================
+with tab_screen:
+    st.header("Custom Universe Screening")
 
-st.title("🎯 Portfolio ETF Screener & Analysis")
+    if not is_points_valid:
+        st.error(f"⚠️ Point allocation total is currently {total_raw_points} pts. Please balance weights to 100.")
 
-benchmark_df = fetch_etf_history("SPY")
-
-if not is_points_valid:
-    st.error(f"⚠️ Points allocation total is currently {total_raw_points} pts. Please balance weights to 100 in the ⚙️ Sidebar Configurator.")
-
-user_input = st.text_area(
-    "Enter ETF Tickers (comma or space separated):",
-    value=st.session_state["user_tickers"],
-    height=100,
-    key="ticker_input_field"
-)
-
-st.session_state["user_tickers"] = user_input
-tickers_list = [t.strip().upper() for t in user_input.replace("\n", ",").split(",") if t.strip()]
-
-if st.button("Run Portfolio Screen", type="primary", disabled=not is_points_valid):
-    results = []
-    progress_bar = st.progress(0)
-    
-    for idx, ticker in enumerate(tickers_list):
-        df = fetch_etf_history(ticker)
-        eval_res = evaluate_rules(df, benchmark_df, RULE_PARAMS)
-        
-        if eval_res is not None:
-            results.append({
-                "Ticker": ticker,
-                "Total Score": eval_res["Score"],
-                "Price_Raw": eval_res['Close'],
-                "Price": f"${eval_res['Close']:.2f}",
-                "Trend": "✅ Pass" if eval_res["Pass_MA"] else "❌ Fail",
-                "Return": "✅ Pass" if eval_res["Pass_Perf"] else "❌ Fail",
-                "Flow": "✅ Pass" if eval_res["Pass_Flow"] else "❌ Fail",
-                "Rel Strength": "✅ Pass" if eval_res["Pass_RS"] else "❌ Fail",
-                "Vol Exp": "✅ Pass" if eval_res["Pass_VolExp"] else "❌ Fail",
-                "Drawdown": "✅ Pass" if eval_res["Pass_DD"] else "❌ Fail",
-                "52W High": "✅ Pass" if eval_res["Pass_52W"] else "❌ Fail",
-                "RSI Band": "✅ Pass" if eval_res["Pass_RSI"] else "❌ Fail",
-                "Sharpe": "✅ Pass" if eval_res["Pass_Sharpe"] else "❌ Fail",
-                "ATR Squeeze": "✅ Pass" if eval_res["Pass_ATR"] else "❌ Fail",
-            })
-        
-        progress_bar.progress((idx + 1) / len(tickers_list))
-
-    progress_bar.empty()
-
-    if results:
-        prior_run = get_previous_run_data()
-        save_run_snapshot(results)
-
-        res_df = pd.DataFrame(results)
-        changes = []
-        for _, row in res_df.iterrows():
-            t = row["Ticker"]
-            if not prior_run.empty and t in prior_run.index:
-                prev_s = prior_run.loc[t, "Total_Score"]
-                diff = int(row["Total Score"] - prev_s)
-                changes.append(f"{diff:+d} pts" if diff != 0 else "0 pts")
-            else:
-                changes.append("New")
-        
-        res_df.insert(2, "vs Prior Run", changes)
-        res_df = res_df.sort_values(by="Total Score", ascending=False).reset_index(drop=True)
-        st.session_state["last_screener_df"] = res_df
-    else:
-        st.warning("Could not retrieve valid historical data for any provided tickers.")
-
-
-# Display interactive results table
-if "last_screener_df" in st.session_state and not st.session_state["last_screener_df"].empty:
-    st.subheader("Portfolio Scoring Matrix")
-    st.caption("💡 Select any row to pop open its detailed Scorecard modal window.")
-
-    screener_df = st.session_state["last_screener_df"]
-    
-    event = st.dataframe(
-        screener_df.drop(columns=["Price_Raw"]),
-        hide_index=True,
-        column_config={
-            "Total Score": st.column_config.ProgressColumn(
-                "Total Score", format="%d pts", min_value=0, max_value=100
-            ),
-            "vs Prior Run": st.column_config.TextColumn("vs Prior Run")
-        },
-        use_container_width=True,
-        on_select="rerun",
-        selection_mode="single-row"
+    user_input = st.text_area(
+        "Enter ETF Tickers (comma or space separated):",
+        value=st.session_state["user_tickers"],
+        height=100,
+        key="ticker_input_field"
     )
 
-    # Open Modal Window on Table Click Selection
-    if event and event.selection and event.selection.rows:
-        selected_index = event.selection.rows[0]
-        selected_ticker = screener_df.iloc[selected_index]["Ticker"]
-        show_scorecard_modal(selected_ticker, benchmark_df, RULE_PARAMS)
+    st.session_state["user_tickers"] = user_input
+    tickers_list = [t.strip().upper() for t in user_input.replace("\n", ",").split(",") if t.strip()]
+
+    if st.button("Run Universe Screen", type="primary", disabled=not is_points_valid):
+        results = []
+        progress_bar = st.progress(0)
+        
+        for idx, ticker in enumerate(tickers_list):
+            df = fetch_etf_history(ticker)
+            eval_res = evaluate_rules(df, benchmark_df, RULE_PARAMS)
+            
+            if eval_res is not None:
+                results.append({
+                    "Ticker": ticker,
+                    "Total Score": eval_res["Score"],
+                    "Price_Raw": eval_res['Close'],
+                    "Price": f"${eval_res['Close']:.2f}",
+                    "Trend": "✅ Pass" if eval_res["Pass_MA"] else "❌ Fail",
+                    "Return": "✅ Pass" if eval_res["Pass_Perf"] else "❌ Fail",
+                    "Flow": "✅ Pass" if eval_res["Pass_Flow"] else "❌ Fail",
+                    "Rel Strength": "✅ Pass" if eval_res["Pass_RS"] else "❌ Fail",
+                    "Vol Exp": "✅ Pass" if eval_res["Pass_VolExp"] else "❌ Fail",
+                    "Drawdown": "✅ Pass" if eval_res["Pass_DD"] else "❌ Fail",
+                    "52W High": "✅ Pass" if eval_res["Pass_52W"] else "❌ Fail",
+                    "RSI Band": "✅ Pass" if eval_res["Pass_RSI"] else "❌ Fail",
+                    "Sharpe": "✅ Pass" if eval_res["Pass_Sharpe"] else "❌ Fail",
+                    "ATR Squeeze": "✅ Pass" if eval_res["Pass_ATR"] else "❌ Fail",
+                })
+            
+            progress_bar.progress((idx + 1) / len(tickers_list))
+
+        progress_bar.empty()
+
+        if results:
+            prior_run = get_previous_run_data()
+            save_run_snapshot(results)
+
+            res_df = pd.DataFrame(results)
+            changes = []
+            for _, row in res_df.iterrows():
+                t = row["Ticker"]
+                if not prior_run.empty and t in prior_run.index:
+                    prev_s = prior_run.loc[t, "Total_Score"]
+                    diff = int(row["Total Score"] - prev_s)
+                    changes.append(f"{diff:+d} pts" if diff != 0 else "0 pts")
+                else:
+                    changes.append("New")
+            
+            res_df.insert(2, "vs Prior Run", changes)
+            res_df = res_df.sort_values(by="Total Score", ascending=False).reset_index(drop=True)
+
+            st.dataframe(
+                res_df.drop(columns=["Price_Raw"]),
+                hide_index=True,
+                column_config={
+                    "Total Score": st.column_config.ProgressColumn(
+                        "Total Score", format="%d pts", min_value=0, max_value=100
+                    ),
+                    "vs Prior Run": st.column_config.TextColumn("vs Prior Run")
+                },
+                use_container_width=True
+            )
+        else:
+            st.warning("Could not retrieve valid historical data for any provided tickers.")
+
+
+# ==============================================================================
+# TAB 3: SINGLE SYMBOL SCORECARD
+# ==============================================================================
+with tab_single:
+    st.header("Single ETF Rule Breakdown")
+
+    lookup_ticker = st.text_input("Enter Ticker Symbol:", value="", placeholder="e.g. EMXC, VFLO, SCHD").strip().upper()
+
+    if lookup_ticker:
+        if not is_points_valid:
+            st.warning("⚠️ Points allocation total must equal exactly 100 points.")
+        else:
+            with st.spinner(f"Fetching and analyzing {lookup_ticker}..."):
+                df = fetch_etf_history(lookup_ticker)
+                res = evaluate_rules(df, benchmark_df, RULE_PARAMS)
+
+            if res is not None:
+                prior_run = get_previous_run_data()
+                delta_str = None
+                if not prior_run.empty and lookup_ticker in prior_run.index:
+                    prev_score = prior_run.loc[lookup_ticker, "Total_Score"]
+                    diff = int(res["Score"] - prev_score)
+                    delta_str = f"{diff:+d} pts vs prior run"
+
+                st.metric(
+                    label=f"Composite Score for {lookup_ticker}",
+                    value=f"{res['Score']} / 100 Points",
+                    delta=delta_str
+                )
+
+                # Card Grids with Metrics and Detailed Educational Commentary
+                st.markdown("---")
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    status_ma = "✅ PASS" if res["Pass_MA"] else "❌ FAIL"
+                    pts_ma = RULE_PARAMS['weight_ma'] if res['Pass_MA'] else 0
+                    st.metric("1. Trend Status", status_ma, delta=f"{pts_ma} / {RULE_PARAMS['weight_ma']} pts")
+                    st.info(res["Comm_MA"])
+
+                with c2:
+                    status_perf = "✅ PASS" if res["Pass_Perf"] else "❌ FAIL"
+                    pts_perf = RULE_PARAMS['weight_perf'] if res['Pass_Perf'] else 0
+                    st.metric("2. Return Status", status_perf, delta=f"{pts_perf} / {RULE_PARAMS['weight_perf']} pts")
+                    st.info(res["Comm_Perf"])
+
+                with c3:
+                    status_flow = "✅ PASS" if res["Pass_Flow"] else "❌ FAIL"
+                    pts_flow = RULE_PARAMS['weight_flow'] if res['Pass_Flow'] else 0
+                    st.metric("3. Flow Status", status_flow, delta=f"{pts_flow} / {RULE_PARAMS['weight_flow']} pts")
+                    st.info(res["Comm_Flow"])
+
+                st.markdown("---")
+                c4, c5, c6 = st.columns(3)
+                with c4:
+                    status_rs = "✅ PASS" if res["Pass_RS"] else "❌ FAIL"
+                    pts_rs = RULE_PARAMS['weight_rs'] if res['Pass_RS'] else 0
+                    st.metric("4. Rel Strength", status_rs, delta=f"{pts_rs} / {RULE_PARAMS['weight_rs']} pts")
+                    st.info(res["Comm_RS"])
+
+                with c5:
+                    status_vol = "✅ PASS" if res["Pass_VolExp"] else "❌ FAIL"
+                    pts_vol = RULE_PARAMS['weight_vol_exp'] if res['Pass_VolExp'] else 0
+                    st.metric("5. Volume Ratio", status_vol, delta=f"{pts_vol} / {RULE_PARAMS['weight_vol_exp']} pts")
+                    st.info(res["Comm_VolExp"])
+
+                with c6:
+                    status_dd = "✅ PASS" if res["Pass_DD"] else "❌ FAIL"
+                    pts_dd = RULE_PARAMS['weight_dd'] if res['Pass_DD'] else 0
+                    st.metric("6. Max Drawdown", status_dd, delta=f"{pts_dd} / {RULE_PARAMS['weight_dd']} pts")
+                    st.info(res["Comm_DD"])
+
+                st.markdown("---")
+                c7, c8, c9 = st.columns(3)
+                with c7:
+                    status_52w = "✅ PASS" if res["Pass_52W"] else "❌ FAIL"
+                    pts_52w = RULE_PARAMS['weight_52w'] if res['Pass_52W'] else 0
+                    st.metric("7. 52W Proximity", status_52w, delta=f"{pts_52w} / {RULE_PARAMS['weight_52w']} pts")
+                    st.info(res["Comm_52W"])
+
+                with c8:
+                    status_rsi = "✅ PASS" if res["Pass_RSI"] else "❌ FAIL"
+                    pts_rsi = RULE_PARAMS['weight_rsi'] if res['Pass_RSI'] else 0
+                    st.metric("8. RSI Band", status_rsi, delta=f"{pts_rsi} / {RULE_PARAMS['weight_rsi']} pts")
+                    st.info(res["Comm_RSI"])
+
+                with c9:
+                    status_sharpe = "✅ PASS" if res["Pass_Sharpe"] else "❌ FAIL"
+                    pts_sharpe = RULE_PARAMS['weight_sharpe'] if res['Pass_Sharpe'] else 0
+                    st.metric("9. Sharpe Ratio", status_sharpe, delta=f"{pts_sharpe} / {RULE_PARAMS['weight_sharpe']} pts")
+                    st.info(res["Comm_Sharpe"])
+
+                st.markdown("---")
+                c10, _ = st.columns([1, 2])
+                with c10:
+                    status_atr = "✅ PASS" if res["Pass_ATR"] else "❌ FAIL"
+                    pts_atr = RULE_PARAMS['weight_atr'] if res['Pass_ATR'] else 0
+                    st.metric("10. ATR Volatility", status_atr, delta=f"{pts_atr} / {RULE_PARAMS['weight_atr']} pts")
+                    st.info(res["Comm_ATR"])
+            else:
+                st.error(f"Could not retrieve sufficient historical data for '{lookup_ticker}'.")
