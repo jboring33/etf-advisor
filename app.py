@@ -2,15 +2,15 @@
 app.py
 ======
 Modular ETF Rule Configurator & Scoring Engine (10 Rules)
-Features:
-- Sidebar Configurator (⚙️ icon) to edit 10 rules and point weights.
-- Non-blocking data fetching to prevent infinite Streamlit spinner lock.
-- Exchange/Market mapping column included in screening output.
-- Interactive Scorecard Modal Window on table row click detailing full technical breakdown.
+Fixes:
+- Hard 5-second process timeout on yfinance calls to prevent startup hang.
+- Lazy loads benchmark data only when screening is actively executed.
+- Decoupled st.dataframe selection state to prevent infinite UI rerun loops.
 """
 
 import os
 from datetime import datetime
+import concurrent.futures
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -44,6 +44,9 @@ st.markdown("""
 
 if "user_tickers" not in st.session_state:
     st.session_state["user_tickers"] = "VFLO, SCHD, SCYB, JPST, JAAA, VEA, DIVI, EMXC, SMH, XLK, QQQ, SPY"
+
+if "selected_ticker_modal" not in st.session_state:
+    st.session_state["selected_ticker_modal"] = None
 
 if "config_df_v2" not in st.session_state:
     st.session_state["config_df_v2"] = pd.DataFrame([
@@ -104,20 +107,18 @@ def get_previous_run_data() -> pd.DataFrame:
 
 
 # ==============================================================================
-# SAFE DATA FETCHING ENGINE (PREVENTS INFINITE SPINNER)
+# SAFE TIMEOUT-PROTECTED DATA FETCHING ENGINE
 # ==============================================================================
 
-@st.cache_data(ttl=1800, show_spinner=False)
-def fetch_etf_history(ticker: str) -> tuple[pd.DataFrame, str]:
-    """Fetches 1 year of daily price history and exchange/market info with timeouts."""
-    ticker_clean = ticker.strip().upper()
+def _raw_fetch_yfinance(ticker_clean: str) -> tuple[pd.DataFrame, str]:
+    """Internal raw worker function called within thread pool executor."""
     market_name = "N/A"
     df_out = pd.DataFrame()
     
     try:
         ticker_obj = yf.Ticker(ticker_clean)
         
-        # Safely extract exchange metadata without hanging on remote attributes
+        # Fast Exchange Resolution
         try:
             raw_exchange = getattr(ticker_obj.fast_info, "exchange", None)
             if raw_exchange:
@@ -129,8 +130,7 @@ def fetch_etf_history(ticker: str) -> tuple[pd.DataFrame, str]:
         except Exception:
             market_name = "N/A"
 
-        # Explicit timeout to avoid thread lockup
-        df = ticker_obj.history(period="1y", auto_adjust=True, timeout=10)
+        df = ticker_obj.history(period="1y", auto_adjust=True)
         if df is not None and not df.empty:
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
@@ -139,8 +139,22 @@ def fetch_etf_history(ticker: str) -> tuple[pd.DataFrame, str]:
                 df_out = df.dropna(subset=["Close"]).reset_index()
     except Exception:
         pass
-        
+
     return df_out, market_name
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def fetch_etf_history(ticker: str) -> tuple[pd.DataFrame, str]:
+    """Wraps yfinance call in a strict 5-second hard timeout executor."""
+    ticker_clean = ticker.strip().upper()
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(_raw_fetch_yfinance, ticker_clean)
+        try:
+            return future.result(timeout=5)  # Hard 5-second deadline
+        except concurrent.futures.TimeoutError:
+            return pd.DataFrame(), "N/A"
+        except Exception:
+            return pd.DataFrame(), "N/A"
 
 
 # ==============================================================================
@@ -171,7 +185,6 @@ def calculate_atr_ratio(df: pd.DataFrame, period: int = 14) -> float:
     return float((atr / latest_close) * 100) if latest_close > 0 else 0.0
 
 def derive_action_signal(score: int) -> tuple[str, str, str]:
-    """Generates a Buy, Hold, or Sell signal with guidance based on score."""
     if score >= 70:
         return "🟢 BUY", "success", "Strong institutional momentum and rule setup. Prime allocation candidate."
     elif score >= 45:
@@ -313,7 +326,7 @@ def evaluate_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
         f"**Expected Range:** ≤ 2.5%."
     )
 
-    # Calculate Total Points
+    # Total Points
     total_score = 0
     if rule_ma_passed: total_score += params["weight_ma"]
     if rule_perf_passed: total_score += params["weight_perf"]
@@ -343,15 +356,18 @@ def evaluate_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
 
 
 # ==============================================================================
-# MODAL SCORECARD WINDOW (@st.dialog) - NON-BLOCKING
+# MODAL SCORECARD WINDOW (@st.dialog)
 # ==============================================================================
 
 @st.dialog("🔍 Scorecard Breakdown", width="large")
-def show_scorecard_modal(ticker: str, df: pd.DataFrame, market: str, benchmark_df: pd.DataFrame, params: dict):
-    """Renders ETF Scorecard with full signal breakdown using pre-fetched data."""
+def render_scorecard_dialog(ticker: str, params: dict):
+    """Renders ETF Scorecard with lazy fetching when opened."""
     st.subheader(f"Scorecard: {ticker}")
 
-    res = evaluate_rules(df, benchmark_df, params)
+    with st.spinner(f"Fetching data for {ticker}..."):
+        ticker_df, market_name = fetch_etf_history(ticker)
+        benchmark_df, _ = fetch_etf_history("SPY")
+        res = evaluate_rules(ticker_df, benchmark_df, params)
 
     if res is not None:
         prior_run = get_previous_run_data()
@@ -366,7 +382,7 @@ def show_scorecard_modal(ticker: str, df: pd.DataFrame, market: str, benchmark_d
         c_metric1, c_metric2 = st.columns([1, 1])
         with c_metric1:
             st.metric(
-                label=f"Composite Score for {ticker} ({market})",
+                label=f"Composite Score for {ticker} ({market_name})",
                 value=f"{res['Score']} / 100 Points",
                 delta=delta_str
             )
@@ -506,8 +522,6 @@ RULE_PARAMS = {
 
 st.title("🎯 Portfolio ETF Screener & Analysis")
 
-benchmark_df, _ = fetch_etf_history("SPY")
-
 if not is_points_valid:
     st.error(f"⚠️ Points allocation total is currently {total_raw_points} pts. Please balance weights to 100 in the ⚙️ Sidebar Configurator.")
 
@@ -524,6 +538,9 @@ tickers_list = [t.strip().upper() for t in user_input.replace("\n", ",").split("
 if st.button("Run Portfolio Screen", type="primary", disabled=not is_points_valid):
     results = []
     progress_bar = st.progress(0)
+    
+    # Lazy fetch benchmark SPY only when button is pressed
+    benchmark_df, _ = fetch_etf_history("SPY")
     
     for idx, ticker in enumerate(tickers_list):
         df, market = fetch_etf_history(ticker)
@@ -597,13 +614,17 @@ if "last_screener_df" in st.session_state and not st.session_state["last_screene
         },
         use_container_width=True,
         on_select="rerun",
-        selection_mode="single-row"
+        selection_mode="single-row",
+        key="portfolio_matrix_table"
     )
 
-    # Open Modal Window safely without re-triggering recursive network calls
     if event and event.selection and event.selection.rows:
         selected_index = event.selection.rows[0]
         selected_ticker = screener_df.iloc[selected_index]["Ticker"]
-        
-        ticker_df, market_name = fetch_etf_history(selected_ticker)
-        show_scorecard_modal(selected_ticker, ticker_df, market_name, benchmark_df, RULE_PARAMS)
+        st.session_state["selected_ticker_modal"] = selected_ticker
+
+# Render Dialog cleanly when active
+if st.session_state.get("selected_ticker_modal"):
+    ticker_to_show = st.session_state["selected_ticker_modal"]
+    st.session_state["selected_ticker_modal"] = None
+    render_scorecard_dialog(ticker_to_show, RULE_PARAMS)
