@@ -1,12 +1,17 @@
 """
 app.py
 ======
-Modular ETF Rule Configurator & Scoring Engine (10 Rules)
+Weekly ETF Rule Configurator & Scoring Engine (10 Rules)
+Optimized for Weekly Timeframe / Medium-to-Long Term Position Screening.
+
 Features:
-- Independent "Run Portfolio Screen" and "Run Watchlist Screen" buttons.
-- Separate result view for Portfolio vs Watchlist tickers.
-- Reliable text-file persistence across reboots.
-- Modal detailed scorecard on row click.
+- Resamples daily data to true Weekly candles (W-FRI).
+- Weekly OBV Trend (Accumulation/Distribution).
+- Weekly MACD (12, 26, 9) Signal Alignment.
+- 10-week vs 30-week EMA Stage Analysis Trend Filter.
+- Independent Portfolio & Watchlist Screens.
+- Disk-backed ticker persistence.
+- Modal scorecard window on row selection.
 """
 
 import os
@@ -21,14 +26,12 @@ WATCHLIST_FILE = "saved_watchlist.txt"
 DEFAULT_PORTFOLIO = "SCHD, VFLO, DIVI, JPST, JAAA"
 DEFAULT_WATCHLIST = "VEA, SCYB, EMXC"
 
-# Page setup
 st.set_page_config(
-    page_title="Portfolio ETF Screener & Rule Engine",
+    page_title="Weekly ETF Screener & Rule Engine",
     page_icon="⚙️",
     layout="wide"
 )
 
-# Custom Styling
 st.markdown("""
 <style>
     div.stButton > button[kind="primary"] {
@@ -46,7 +49,6 @@ st.markdown("""
 # ==============================================================================
 
 def load_ticker_file(file_path: str, default_val: str) -> str:
-    """Reads saved tickers from a local text file if present."""
     if os.path.exists(file_path):
         try:
             with open(file_path, "r", encoding="utf-8") as f:
@@ -58,14 +60,12 @@ def load_ticker_file(file_path: str, default_val: str) -> str:
     return default_val
 
 def save_ticker_file(file_path: str, text_content: str):
-    """Writes updated ticker text to a local text file to persist reboots."""
     try:
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(text_content.strip())
     except Exception:
         pass
 
-# Initialize session state values from disk once
 if "portfolio_tickers" not in st.session_state:
     st.session_state["portfolio_tickers"] = load_ticker_file(PORTFOLIO_FILE, DEFAULT_PORTFOLIO)
 
@@ -74,31 +74,31 @@ if "watchlist_tickers" not in st.session_state:
 
 if "config_df_v2" not in st.session_state:
     st.session_state["config_df_v2"] = pd.DataFrame([
-        {"Rule #": "Rule 1", "Rule Name": "Moving Average Trend", "My Weight": 12},
-        {"Rule #": "Rule 2", "Rule Name": "Absolute Return", "My Weight": 8},
-        {"Rule #": "Rule 3", "Rule Name": "Institutional Money Flow", "My Weight": 11},
-        {"Rule #": "Rule 4", "Rule Name": "Relative Strength vs SPY", "My Weight": 15},
-        {"Rule #": "Rule 5", "Rule Name": "Volume Expansion", "My Weight": 6},
-        {"Rule #": "Rule 6", "Rule Name": "Max Trailing Drawdown", "My Weight": 16},
-        {"Rule #": "Rule 7", "Rule Name": "52-Week High Proximity", "My Weight": 7},
-        {"Rule #": "Rule 8", "Rule Name": "RSI Band Filter", "My Weight": 5},
-        {"Rule #": "Rule 9", "Rule Name": "Sharpe Ratio Filter", "My Weight": 15},
-        {"Rule #": "Rule 10", "Rule Name": "ATR Volatility Squeeze", "My Weight": 5},
+        {"Rule #": "Rule 1", "Rule Name": "Weekly Trend (10/30 EMA)", "My Weight": 15},
+        {"Rule #": "Rule 2", "Rule Name": "12-Week Absolute Return", "My Weight": 10},
+        {"Rule #": "Rule 3", "Rule Name": "Weekly OBV Trend", "My Weight": 10},
+        {"Rule #": "Rule 4", "Rule Name": "12-Week Relative Strength", "My Weight": 15},
+        {"Rule #": "Rule 5", "Rule Name": "Weekly MACD Alignment", "My Weight": 10},
+        {"Rule #": "Rule 6", "Rule Name": "26-Week Max Drawdown", "My Weight": 12},
+        {"Rule #": "Rule 7", "Rule Name": "52-Week High Proximity", "My Weight": 8},
+        {"Rule #": "Rule 8", "Rule Name": "Weekly RSI Band Filter", "My Weight": 5},
+        {"Rule #": "Rule 9", "Rule Name": "52-Week Sharpe Ratio", "My Weight": 10},
+        {"Rule #": "Rule 10", "Rule Name": "12-Week Money Flow Index", "My Weight": 5},
     ])
 
 
 # ==============================================================================
-# DATA FETCHING ENGINE
+# DATA FETCHING & WEEKLY RESAMPLING
 # ==============================================================================
 
 @st.cache_data(ttl=1800, show_spinner=False)
-def fetch_etf_history(ticker: str) -> pd.DataFrame:
-    """Fetches 1 year of daily price history using yfinance."""
+def fetch_weekly_etf_history(ticker: str) -> pd.DataFrame:
+    """Fetches 2 years of daily data and resamples to Weekly candles (W-FRI)."""
     ticker_clean = ticker.strip().upper()
     try:
         df = yf.download(
             ticker_clean,
-            period="1y",
+            period="2y",
             progress=False,
             auto_adjust=True,
             threads=False,
@@ -108,18 +108,27 @@ def fetch_etf_history(ticker: str) -> pd.DataFrame:
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
             df = df.loc[:, ~df.columns.duplicated()]
-            if "Close" in df.columns and len(df) > 30:
-                return df.dropna(subset=["Close"]).reset_index()
+            
+            if "Close" in df.columns and len(df) > 60:
+                # Resample daily data to weekly candles
+                weekly_df = pd.DataFrame()
+                weekly_df["Open"] = df["Open"].resample("W-FRI").first()
+                weekly_df["High"] = df["High"].resample("W-FRI").max()
+                weekly_df["Low"] = df["Low"].resample("W-FRI").min()
+                weekly_df["Close"] = df["Close"].resample("W-FRI").last()
+                weekly_df["Volume"] = df["Volume"].resample("W-FRI").sum() if "Volume" in df.columns else 0
+                
+                return weekly_df.dropna(subset=["Close"]).reset_index()
     except Exception:
         pass
     return pd.DataFrame()
 
 
 # ==============================================================================
-# TECHNICAL HELPER FUNCTIONS & RULE ENGINE
+# TECHNICAL HELPER FUNCTIONS (WEEKLY)
 # ==============================================================================
 
-def calculate_rsi(series: pd.Series, period: int = 14) -> float:
+def calculate_weekly_rsi(series: pd.Series, period: int = 14) -> float:
     delta = series.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
@@ -128,189 +137,184 @@ def calculate_rsi(series: pd.Series, period: int = 14) -> float:
     val = rsi.iloc[-1] if not rsi.empty else 50.0
     return float(val) if not pd.isna(val) else 50.0
 
-def calculate_atr_ratio(df: pd.DataFrame, period: int = 14) -> float:
-    if len(df) < period + 1 or "High" not in df.columns or "Low" not in df.columns:
-        return 0.0
-    high = pd.Series(df["High"].values.flatten())
-    low = pd.Series(df["Low"].values.flatten())
-    close = pd.Series(df["Close"].values.flatten())
-    tr1 = high - low
-    tr2 = abs(high - close.shift())
-    tr3 = abs(low - close.shift())
-    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-    atr = tr.rolling(period).mean().iloc[-1]
-    latest_close = close.iloc[-1]
-    return float((atr / latest_close) * 100) if latest_close > 0 else 0.0
-
 def derive_action_signal(score: int) -> tuple[str, str, str]:
-    """Generates a Buy, Hold, or Sell signal based on score."""
     if score >= 70:
-        return "🟢 BUY", "success", "Strong institutional alignment and multi-factor momentum. Favorable candidate for fresh capital allocation."
+        return "🟢 BUY", "success", "Strong multi-week structural momentum and institutional accumulation. Favorable candidate for core portfolio positioning."
     elif score >= 45:
-        return "🟡 HOLD", "warning", "Neutral performance or consolidation phase. Maintain existing exposure but await further breakout confirmation before adding."
+        return "🟡 HOLD", "warning", "Consolidation or neutral weekly trend. Maintain current positioning; wait for a weekly breakout before adding capital."
     else:
-        return "🔴 SELL", "error", "Technical metrics indicate lagging momentum, elevated drawdown, or capital outflow. Consider trimming or reallocating."
+        return "🔴 SELL", "error", "Weekly technical indicators indicate structural trend decay, elevated drawdown, or sustained capital distribution."
 
-def evaluate_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
-    if df.empty or len(df) < params["ema_slow"]:
+
+# ==============================================================================
+# WEEKLY RULE ENGINE
+# ==============================================================================
+
+def evaluate_weekly_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
+    if df.empty or len(df) < 35:
         return None
 
     close = pd.Series(df["Close"].values.flatten())
     volume = pd.Series(df["Volume"].values.flatten()) if "Volume" in df.columns else pd.Series(np.zeros(len(df)))
 
-    # 1. Trend
-    ema_fast = close.ewm(span=params["ema_fast"], adjust=False).mean()
-    ema_slow = close.ewm(span=params["ema_slow"], adjust=False).mean()
+    # 1. Weekly Trend (10-week vs 30-week EMA)
+    ema_fast = close.ewm(span=params["ema_fast_w"], adjust=False).mean()
+    ema_slow = close.ewm(span=params["ema_slow_w"], adjust=False).mean()
     latest_close = float(close.iloc[-1])
     fast_val = float(ema_fast.iloc[-1])
     slow_val = float(ema_slow.iloc[-1])
     rule_ma_passed = fast_val > slow_val
     comm_ma = (
-        f"**Data:** 20 EMA (${fast_val:.2f}) vs 50 EMA (${slow_val:.2f})\n\n"
-        f"**Why it Matters:** Confirms medium-term bullish momentum.\n\n"
-        f"**Expected Range:** 20 EMA > 50 EMA."
+        f"**Data:** 10 Wk EMA (${fast_val:.2f}) vs 30 Wk EMA (${slow_val:.2f})\n\n"
+        f"**Why it Matters:** Establishes medium-to-long term Stage 2 uptrend.\n\n"
+        f"**Expected Range:** 10 Wk EMA > 30 Wk EMA."
     )
 
-    # 2. Performance
-    lookback_days = min(params["perf_days"], len(close) - 1)
-    past_close = float(close.iloc[-lookback_days])
+    # 2. Absolute Return (12-Week / Quarterly Performance)
+    lookback_weeks = min(params["perf_weeks"], len(close) - 1)
+    past_close = float(close.iloc[-lookback_weeks])
     period_return_pct = ((latest_close - past_close) / past_close) * 100
     rule_perf_passed = period_return_pct >= params["min_return_pct"]
     comm_perf = (
-        f"**Data:** {lookback_days}d Return: {period_return_pct:+.2f}%\n\n"
-        f"**Why it Matters:** Filters out lagging assets.\n\n"
-        f"**Expected Range:** Target ≥ +{params['min_return_pct']}%."
+        f"**Data:** {lookback_weeks}-Week Return: {period_return_pct:+.2f}%\n\n"
+        f"**Why it Matters:** Ensures asset maintains positive quarterly return momentum.\n\n"
+        f"**Expected Range:** Target ≥ +{params['min_return_pct']}%. "
     )
 
-    # 3. Flow
-    hist_vol = volume.tail(22)
-    hist_close = close.tail(22)
-    price_diff = hist_close.diff()
-    directional_vol = np.where(price_diff >= 0, hist_vol, -hist_vol)
-    net_vol = np.nan_to_num(directional_vol).sum()
-    avg_vol = hist_vol.mean()
-    flow_score = 50 if avg_vol == 0 else int(min(100, max(0, 50 + (net_vol / (avg_vol * 10)) * 50)))
-    rule_flow_passed = flow_score >= params["min_flow_score"]
-    comm_flow = (
-        f"**Data:** Flow Index: {flow_score}/100\n\n"
-        f"**Why it Matters:** Identifies accumulation vs distribution.\n\n"
-        f"**Expected Range:** 50-100."
+    # 3. Weekly OBV Trend (Accumulation/Distribution)
+    price_diff = close.diff()
+    direction = np.where(price_diff > 0, 1, np.where(price_diff < 0, -1, 0))
+    obv = (volume * direction).cumsum()
+    obv_sma20 = obv.rolling(window=20).mean()
+    latest_obv = float(obv.iloc[-1]) if not obv.empty else 0.0
+    latest_obv_sma = float(obv_sma20.iloc[-1]) if not obv_sma20.empty else 0.0
+    rule_obv_passed = latest_obv > latest_obv_sma
+    comm_obv = (
+        f"**Data:** OBV: {latest_obv:,.0f} vs 20 Wk OBV SMA: {latest_obv_sma:,.0f}\n\n"
+        f"**Why it Matters:** Confirms institutional smart-money accumulation over time.\n\n"
+        f"**Expected Range:** Weekly OBV > 20 Wk OBV SMA."
     )
 
-    # 4. Relative Strength
+    # 4. Relative Strength vs SPY (12-Week Alpha)
     alpha_pct = 0.0
     rule_rs_passed = False
-    if not benchmark_df.empty and len(benchmark_df) >= lookback_days:
+    if not benchmark_df.empty and len(benchmark_df) >= lookback_weeks:
         bench_close = pd.Series(benchmark_df["Close"].values.flatten())
         bench_latest = float(bench_close.iloc[-1])
-        bench_past = float(bench_close.iloc[-min(lookback_days, len(bench_close) - 1)])
+        bench_past = float(bench_close.iloc[-min(lookback_weeks, len(bench_close) - 1)])
         bench_return = ((bench_latest - bench_past) / bench_past) * 100
         alpha_pct = period_return_pct - bench_return
         rule_rs_passed = alpha_pct >= params["min_alpha_pct"]
     comm_rs = (
-        f"**Data:** Alpha vs SPY: {alpha_pct:+.2f}%\n\n"
-        f"**Why it Matters:** Outperforming market benchmark.\n\n"
-        f"**Expected Range:** ≥ +1.0% alpha."
+        f"**Data:** 12-Week Alpha vs SPY: {alpha_pct:+.2f}%\n\n"
+        f"**Why it Matters:** Measures true relative outperformance over broad market.\n\n"
+        f"**Expected Range:** ≥ +1.0% Alpha."
     )
 
-    # 5. Vol Exp
-    vol_ratio = 1.0
-    rule_vol_exp_passed = False
-    if len(volume) >= 50:
-        vol_5d = volume.tail(5).mean()
-        vol_50d = volume.tail(50).mean()
-        vol_ratio = (vol_5d / vol_50d) if vol_50d > 0 else 1.0
-        rule_vol_exp_passed = vol_ratio >= params["min_vol_ratio"]
-    comm_vol = (
-        f"**Data:** 5d/50d Volume Ratio: {vol_ratio:.2f}x\n\n"
-        f"**Why it Matters:** Signals institutional buying spikes.\n\n"
-        f"**Expected Range:** ≥ 1.1x."
+    # 5. Weekly MACD Alignment
+    ema12 = close.ewm(span=12, adjust=False).mean()
+    ema26 = close.ewm(span=26, adjust=False).mean()
+    macd_line = ema12 - ema26
+    signal_line = macd_line.ewm(span=9, adjust=False).mean()
+    latest_macd = float(macd_line.iloc[-1])
+    latest_signal = float(signal_line.iloc[-1])
+    rule_macd_passed = latest_macd > latest_signal
+    comm_macd = (
+        f"**Data:** MACD Line: {latest_macd:.2f} vs Signal Line: {latest_signal:.2f}\n\n"
+        f"**Why it Matters:** Validates underlying weekly momentum direction.\n\n"
+        f"**Expected Range:** MACD Line > Signal Line."
     )
 
-    # 6. Drawdown
+    # 6. Max Trailing Drawdown (26-Week)
     max_dd_pct = 0.0
     rule_dd_passed = False
-    if len(close) >= 60:
-        tail_60 = close.tail(60)
-        rolling_max = tail_60.cummax()
-        drawdown = (tail_60 - rolling_max) / rolling_max
+    if len(close) >= 26:
+        tail_26 = close.tail(26)
+        rolling_max = tail_26.cummax()
+        drawdown = (tail_26 - rolling_max) / rolling_max
         max_dd_pct = abs(float(drawdown.min())) * 100
         rule_dd_passed = max_dd_pct <= params["max_drawdown_pct"]
     comm_dd = (
-        f"**Data:** 60d Max Drawdown: {max_dd_pct:.2f}%\n\n"
-        f"**Why it Matters:** Penalizes high risk/volatile drops.\n\n"
-        f"**Expected Range:** ≤ 10.0%."
+        f"**Data:** 26-Week Max Drawdown: {max_dd_pct:.2f}%\n\n"
+        f"**Why it Matters:** Protects capital against severe multi-month tail risk drops.\n\n"
+        f"**Expected Range:** ≤ 12.0%."
     )
 
-    # 7. 52W High
+    # 7. 52-Week High Proximity
     dist_52w_high_pct = 0.0
     rule_52w_passed = False
-    if len(close) >= 120:
-        high_52w = float(close.tail(252).max()) if len(close) >= 252 else float(close.max())
+    if len(close) >= 52:
+        high_52w = float(close.tail(52).max())
         dist_52w_high_pct = ((high_52w - latest_close) / high_52w) * 100
         rule_52w_passed = dist_52w_high_pct <= params["max_dist_52w_pct"]
     comm_52w = (
         f"**Data:** Distance from 52W High: {dist_52w_high_pct:.2f}%\n\n"
-        f"**Why it Matters:** Evaluates proximity to new highs.\n\n"
-        f"**Expected Range:** ≤ 8.0%."
+        f"**Why it Matters:** Institutional leaders trade near 52-week highs.\n\n"
+        f"**Expected Range:** ≤ 10.0%."
     )
 
-    # 8. RSI
-    rsi_val = calculate_rsi(close, period=14)
+    # 8. Weekly RSI Band Filter
+    rsi_val = calculate_weekly_rsi(close, period=14)
     rule_rsi_passed = (rsi_val >= params["min_rsi"]) and (rsi_val <= params["max_rsi"])
     comm_rsi = (
-        f"**Data:** 14d RSI: {rsi_val:.1f}\n\n"
-        f"**Why it Matters:** Avoids oversold or overbought extremes.\n\n"
-        f"**Expected Range:** 45 to 70."
+        f"**Data:** 14-Week RSI: {rsi_val:.1f}\n\n"
+        f"**Why it Matters:** Filters out weak trends without buying extreme overbought tops.\n\n"
+        f"**Expected Range:** 48 to 68."
     )
 
-    # 9. Sharpe
-    daily_returns = close.pct_change().dropna()
-    ann_return = daily_returns.mean() * 252
-    ann_std = daily_returns.std() * np.sqrt(252)
+    # 9. 52-Week Sharpe Ratio (Weekly Returns)
+    weekly_returns = close.pct_change().dropna()
+    ann_return = weekly_returns.mean() * 52
+    ann_std = weekly_returns.std() * np.sqrt(52)
     sharpe_ratio = (ann_return / ann_std) if ann_std > 0 else 0.0
     rule_sharpe_passed = sharpe_ratio >= params["min_sharpe"]
     comm_sharpe = (
-        f"**Data:** Ann. Sharpe Ratio: {sharpe_ratio:.2f}\n\n"
-        f"**Why it Matters:** Measures risk-adjusted returns.\n\n"
-        f"**Expected Range:** ≥ 0.5."
+        f"**Data:** Annualized Sharpe Ratio: {sharpe_ratio:.2f}\n\n"
+        f"**Why it Matters:** Confirms high risk-adjusted return on weekly volatility.\n\n"
+        f"**Expected Range:** ≥ 0.50."
     )
 
-    # 10. ATR
-    atr_pct = calculate_atr_ratio(df, period=14)
-    rule_atr_passed = atr_pct <= params["max_atr_pct"]
-    comm_atr = (
-        f"**Data:** ATR % of Price: {atr_pct:.2f}%\n\n"
-        f"**Why it Matters:** Measures volatility squeeze.\n\n"
-        f"**Expected Range:** ≤ 2.5%."
+    # 10. 12-Week Money Flow Index (Net Volume)
+    hist_vol = volume.tail(12)
+    hist_close = close.tail(12)
+    p_diff = hist_close.diff()
+    directional_vol = np.where(p_diff >= 0, hist_vol, -hist_vol)
+    net_vol = np.nan_to_num(directional_vol).sum()
+    avg_vol = hist_vol.mean()
+    flow_score = 50 if avg_vol == 0 else int(min(100, max(0, 50 + (net_vol / (avg_vol * 6)) * 50)))
+    rule_flow_passed = flow_score >= params["min_flow_score"]
+    comm_flow = (
+        f"**Data:** 12-Week Flow Index: {flow_score}/100\n\n"
+        f"**Why it Matters:** Measures rolling quarterly net inflow vs outflow.\n\n"
+        f"**Expected Range:** 50-100."
     )
 
-    # Calculate Total Score
+    # Composite Score
     total_score = 0
     if rule_ma_passed: total_score += params["weight_ma"]
     if rule_perf_passed: total_score += params["weight_perf"]
-    if rule_flow_passed: total_score += params["weight_flow"]
+    if rule_obv_passed: total_score += params["weight_obv"]
     if rule_rs_passed: total_score += params["weight_rs"]
-    if rule_vol_exp_passed: total_score += params["weight_vol_exp"]
+    if rule_macd_passed: total_score += params["weight_macd"]
     if rule_dd_passed: total_score += params["weight_dd"]
     if rule_52w_passed: total_score += params["weight_52w"]
     if rule_rsi_passed: total_score += params["weight_rsi"]
     if rule_sharpe_passed: total_score += params["weight_sharpe"]
-    if rule_atr_passed: total_score += params["weight_atr"]
+    if rule_flow_passed: total_score += params["weight_flow"]
 
     return {
         "Score": total_score,
         "Close": latest_close,
         "Pass_MA": rule_ma_passed, "Comm_MA": comm_ma,
         "Pass_Perf": rule_perf_passed, "Comm_Perf": comm_perf,
-        "Pass_Flow": rule_flow_passed, "Comm_Flow": comm_flow,
+        "Pass_OBV": rule_obv_passed, "Comm_OBV": comm_obv,
         "Pass_RS": rule_rs_passed, "Comm_RS": comm_rs,
-        "Pass_VolExp": rule_vol_exp_passed, "Comm_VolExp": comm_vol,
+        "Pass_MACD": rule_macd_passed, "Comm_MACD": comm_macd,
         "Pass_DD": rule_dd_passed, "Comm_DD": comm_dd,
         "Pass_52W": rule_52w_passed, "Comm_52W": comm_52w,
         "Pass_RSI": rule_rsi_passed, "Comm_RSI": comm_rsi,
         "Pass_Sharpe": rule_sharpe_passed, "Comm_Sharpe": comm_sharpe,
-        "Pass_ATR": rule_atr_passed, "Comm_ATR": comm_atr
+        "Pass_Flow": rule_flow_passed, "Comm_Flow": comm_flow
     }
 
 
@@ -318,14 +322,13 @@ def evaluate_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
 # MODAL SCORECARD WINDOW (@st.dialog)
 # ==============================================================================
 
-@st.dialog("🔍 Scorecard Breakdown", width="large")
+@st.dialog("🔍 Weekly Scorecard Breakdown", width="large")
 def show_scorecard_modal(ticker: str, benchmark_df: pd.DataFrame, params: dict):
-    """Renders the ETF Scorecard with Buy/Hold/Sell banner inside a popup modal."""
-    st.subheader(f"Scorecard: {ticker}")
+    st.subheader(f"Weekly Scorecard: {ticker}")
 
-    with st.spinner(f"Analyzing {ticker}..."):
-        df = fetch_etf_history(ticker)
-        res = evaluate_rules(df, benchmark_df, params)
+    with st.spinner(f"Analyzing {ticker} on Weekly scale..."):
+        df = fetch_weekly_etf_history(ticker)
+        res = evaluate_weekly_rules(df, benchmark_df, params)
 
     if res is not None:
         action_label, action_type, action_desc = derive_action_signal(res["Score"])
@@ -333,7 +336,7 @@ def show_scorecard_modal(ticker: str, benchmark_df: pd.DataFrame, params: dict):
         c_metric1, c_metric2 = st.columns([1, 1])
         with c_metric1:
             st.metric(
-                label=f"Composite Score for {ticker}",
+                label=f"Weekly Score for {ticker}",
                 value=f"{res['Score']} / 100 Points"
             )
         with c_metric2:
@@ -349,39 +352,39 @@ def show_scorecard_modal(ticker: str, benchmark_df: pd.DataFrame, params: dict):
         with c1:
             status_ma = "✅ PASS" if res["Pass_MA"] else "❌ FAIL"
             pts_ma = params['weight_ma'] if res['Pass_MA'] else 0
-            st.metric("1. Trend Status", status_ma, delta=f"{pts_ma} / {params['weight_ma']} pts")
+            st.metric("1. Weekly Trend", status_ma, delta=f"{pts_ma} / {params['weight_ma']} pts")
             st.info(res["Comm_MA"])
 
         with c2:
             status_perf = "✅ PASS" if res["Pass_Perf"] else "❌ FAIL"
             pts_perf = params['weight_perf'] if res['Pass_Perf'] else 0
-            st.metric("2. Return Status", status_perf, delta=f"{pts_perf} / {params['weight_perf']} pts")
+            st.metric("2. 12W Return", status_perf, delta=f"{pts_perf} / {params['weight_perf']} pts")
             st.info(res["Comm_Perf"])
 
         with c3:
-            status_flow = "✅ PASS" if res["Pass_Flow"] else "❌ FAIL"
-            pts_flow = params['weight_flow'] if res['Pass_Flow'] else 0
-            st.metric("3. Flow Status", status_flow, delta=f"{pts_flow} / {params['weight_flow']} pts")
-            st.info(res["Comm_Flow"])
+            status_obv = "✅ PASS" if res["Pass_OBV"] else "❌ FAIL"
+            pts_obv = params['weight_obv'] if res['Pass_OBV'] else 0
+            st.metric("3. Weekly OBV", status_obv, delta=f"{pts_obv} / {params['weight_obv']} pts")
+            st.info(res["Comm_OBV"])
 
         st.markdown("---")
         c4, c5, c6 = st.columns(3)
         with c4:
             status_rs = "✅ PASS" if res["Pass_RS"] else "❌ FAIL"
             pts_rs = params['weight_rs'] if res['Pass_RS'] else 0
-            st.metric("4. Rel Strength", status_rs, delta=f"{pts_rs} / {params['weight_rs']} pts")
+            st.metric("4. 12W Rel Strength", status_rs, delta=f"{pts_rs} / {params['weight_rs']} pts")
             st.info(res["Comm_RS"])
 
         with c5:
-            status_vol = "✅ PASS" if res["Pass_VolExp"] else "❌ FAIL"
-            pts_vol = params['weight_vol_exp'] if res['Pass_VolExp'] else 0
-            st.metric("5. Volume Ratio", status_vol, delta=f"{pts_vol} / {params['weight_vol_exp']} pts")
-            st.info(res["Comm_VolExp"])
+            status_macd = "✅ PASS" if res["Pass_MACD"] else "❌ FAIL"
+            pts_macd = params['weight_macd'] if res['Pass_MACD'] else 0
+            st.metric("5. Weekly MACD", status_macd, delta=f"{pts_macd} / {params['weight_macd']} pts")
+            st.info(res["Comm_MACD"])
 
         with c6:
             status_dd = "✅ PASS" if res["Pass_DD"] else "❌ FAIL"
             pts_dd = params['weight_dd'] if res['Pass_DD'] else 0
-            st.metric("6. Max Drawdown", status_dd, delta=f"{pts_dd} / {params['weight_dd']} pts")
+            st.metric("6. 26W Drawdown", status_dd, delta=f"{pts_dd} / {params['weight_dd']} pts")
             st.info(res["Comm_DD"])
 
         st.markdown("---")
@@ -389,28 +392,28 @@ def show_scorecard_modal(ticker: str, benchmark_df: pd.DataFrame, params: dict):
         with c7:
             status_52w = "✅ PASS" if res["Pass_52W"] else "❌ FAIL"
             pts_52w = params['weight_52w'] if res['Pass_52W'] else 0
-            st.metric("7. 52W Proximity", status_52w, delta=f"{pts_52w} / {params['weight_52w']} pts")
+            st.metric("7. 52W High Prox.", status_52w, delta=f"{pts_52w} / {params['weight_52w']} pts")
             st.info(res["Comm_52W"])
 
         with c8:
             status_rsi = "✅ PASS" if res["Pass_RSI"] else "❌ FAIL"
             pts_rsi = params['weight_rsi'] if res['Pass_RSI'] else 0
-            st.metric("8. RSI Band", status_rsi, delta=f"{pts_rsi} / {params['weight_rsi']} pts")
+            st.metric("8. Weekly RSI", status_rsi, delta=f"{pts_rsi} / {params['weight_rsi']} pts")
             st.info(res["Comm_RSI"])
 
         with c9:
             status_sharpe = "✅ PASS" if res["Pass_Sharpe"] else "❌ FAIL"
             pts_sharpe = params['weight_sharpe'] if res['Pass_Sharpe'] else 0
-            st.metric("9. Sharpe Ratio", status_sharpe, delta=f"{pts_sharpe} / {params['weight_sharpe']} pts")
+            st.metric("9. 52W Sharpe", status_sharpe, delta=f"{pts_sharpe} / {params['weight_sharpe']} pts")
             st.info(res["Comm_Sharpe"])
 
         st.markdown("---")
         c10, _ = st.columns([1, 2])
         with c10:
-            status_atr = "✅ PASS" if res["Pass_ATR"] else "❌ FAIL"
-            pts_atr = params['weight_atr'] if res['Pass_ATR'] else 0
-            st.metric("10. ATR Volatility", status_atr, delta=f"{pts_atr} / {params['weight_atr']} pts")
-            st.info(res["Comm_ATR"])
+            status_flow = "✅ PASS" if res["Pass_Flow"] else "❌ FAIL"
+            pts_flow = params['weight_flow'] if res['Pass_Flow'] else 0
+            st.metric("10. Money Flow Index", status_flow, delta=f"{pts_flow} / {params['weight_flow']} pts")
+            st.info(res["Comm_Flow"])
     else:
         st.error(f"Could not retrieve historical data for '{ticker}'.")
 
@@ -420,8 +423,8 @@ def show_scorecard_modal(ticker: str, benchmark_df: pd.DataFrame, params: dict):
 # ==============================================================================
 
 with st.sidebar:
-    st.header("⚙️ Points Configurator")
-    st.caption("Adjust weight allocations across rules (Must sum to 100).")
+    st.header("⚙️ Weekly Points Configurator")
+    st.caption("Adjust weight allocations across weekly rules (Must sum to 100).")
 
     edited_df = st.data_editor(
         st.session_state["config_df_v2"],
@@ -450,29 +453,29 @@ with st.sidebar:
         st.error(f"⚠️ Total is **{total_raw_points} pts** ({action_str}).")
 
 
-# Extract active weights
+# Extract weights
 weights = edited_df["My Weight"].tolist()
 RULE_PARAMS = {
-    "ema_fast": 20, "ema_slow": 50, "weight_ma": int(weights[0]),
-    "perf_days": 60, "min_return_pct": 2.0, "weight_perf": int(weights[1]),
-    "min_flow_score": 50.0, "weight_flow": int(weights[2]),
+    "ema_fast_w": 10, "ema_slow_w": 30, "weight_ma": int(weights[0]),
+    "perf_weeks": 12, "min_return_pct": 2.0, "weight_perf": int(weights[1]),
+    "weight_obv": int(weights[2]),
     "min_alpha_pct": 1.0, "weight_rs": int(weights[3]),
-    "min_vol_ratio": 1.1, "weight_vol_exp": int(weights[4]),
-    "max_drawdown_pct": 10.0, "weight_dd": int(weights[5]),
-    "max_dist_52w_pct": 8.0, "weight_52w": int(weights[6]),
-    "min_rsi": 45.0, "max_rsi": 70.0, "weight_rsi": int(weights[7]),
+    "weight_macd": int(weights[4]),
+    "max_drawdown_pct": 12.0, "weight_dd": int(weights[5]),
+    "max_dist_52w_pct": 10.0, "weight_52w": int(weights[6]),
+    "min_rsi": 48.0, "max_rsi": 68.0, "weight_rsi": int(weights[7]),
     "min_sharpe": 0.5, "weight_sharpe": int(weights[8]),
-    "max_atr_pct": 2.5, "weight_atr": int(weights[9])
+    "min_flow_score": 50.0, "weight_flow": int(weights[9])
 }
 
 
 # ==============================================================================
-# MAIN INTERFACE: PORTFOLIO & WATCHLIST SCREENER
+# MAIN INTERFACE
 # ==============================================================================
 
-st.title("🎯 Portfolio & Watchlist ETF Screener")
+st.title("🎯 Weekly ETF Screener & Analysis")
 
-benchmark_df = fetch_etf_history("SPY")
+benchmark_df = fetch_weekly_etf_history("SPY")
 
 if not is_points_valid:
     st.error(f"⚠️ Points allocation total is currently {total_raw_points} pts. Please balance weights to 100 in the ⚙️ Sidebar Configurator.")
@@ -488,7 +491,6 @@ with col_port:
         key="portfolio_input_field"
     )
     
-    # Save edits to file dynamically
     if portfolio_input != st.session_state["portfolio_tickers"]:
         st.session_state["portfolio_tickers"] = portfolio_input
         save_ticker_file(PORTFOLIO_FILE, portfolio_input)
@@ -509,7 +511,6 @@ with col_watch:
         key="watchlist_input_field"
     )
     
-    # Save edits to file dynamically
     if watchlist_input != st.session_state["watchlist_tickers"]:
         st.session_state["watchlist_tickers"] = watchlist_input
         save_ticker_file(WATCHLIST_FILE, watchlist_input)
@@ -521,25 +522,23 @@ with col_watch:
         use_container_width=True
     )
 
-# Determine execution trigger
 active_tickers = []
 screen_title = ""
 
 if btn_run_portfolio:
     active_tickers = [t.strip().upper() for t in portfolio_input.replace("\n", ",").split(",") if t.strip()]
-    screen_title = "Portfolio Holdings Scoring Matrix"
+    screen_title = "Portfolio Holdings Weekly Scoring Matrix"
 elif btn_run_watchlist:
     active_tickers = [t.strip().upper() for t in watchlist_input.replace("\n", ",").split(",") if t.strip()]
-    screen_title = "Watchlist Scoring Matrix"
+    screen_title = "Watchlist Weekly Scoring Matrix"
 
-# Execution Routine
 if active_tickers:
     results = []
     progress_bar = st.progress(0)
     
     for idx, ticker in enumerate(active_tickers):
-        df = fetch_etf_history(ticker)
-        eval_res = evaluate_rules(df, benchmark_df, RULE_PARAMS)
+        df = fetch_weekly_etf_history(ticker)
+        eval_res = evaluate_weekly_rules(df, benchmark_df, RULE_PARAMS)
         
         if eval_res is not None:
             action_sig, _, _ = derive_action_signal(eval_res["Score"])
@@ -551,14 +550,14 @@ if active_tickers:
                 "Price": f"${eval_res['Close']:.2f}",
                 "Trend": "✅ Pass" if eval_res["Pass_MA"] else "❌ Fail",
                 "Return": "✅ Pass" if eval_res["Pass_Perf"] else "❌ Fail",
-                "Flow": "✅ Pass" if eval_res["Pass_Flow"] else "❌ Fail",
+                "OBV": "✅ Pass" if eval_res["Pass_OBV"] else "❌ Fail",
                 "Rel Strength": "✅ Pass" if eval_res["Pass_RS"] else "❌ Fail",
-                "Vol Exp": "✅ Pass" if eval_res["Pass_VolExp"] else "❌ Fail",
+                "MACD": "✅ Pass" if eval_res["Pass_MACD"] else "❌ Fail",
                 "Drawdown": "✅ Pass" if eval_res["Pass_DD"] else "❌ Fail",
                 "52W High": "✅ Pass" if eval_res["Pass_52W"] else "❌ Fail",
                 "RSI Band": "✅ Pass" if eval_res["Pass_RSI"] else "❌ Fail",
                 "Sharpe": "✅ Pass" if eval_res["Pass_Sharpe"] else "❌ Fail",
-                "ATR Squeeze": "✅ Pass" if eval_res["Pass_ATR"] else "❌ Fail",
+                "Flow": "✅ Pass" if eval_res["Pass_Flow"] else "❌ Fail",
             })
         
         progress_bar.progress((idx + 1) / len(active_tickers))
@@ -576,7 +575,7 @@ if active_tickers:
 
 # Display interactive results table
 if "last_screener_df" in st.session_state and not st.session_state["last_screener_df"].empty:
-    st.subheader(st.session_state.get("last_screener_title", "Scoring Matrix Results"))
+    st.subheader(st.session_state.get("last_screener_title", "Weekly Scoring Matrix Results"))
     st.caption("💡 Select any row to pop open its detailed Scorecard modal window.")
 
     screener_df = st.session_state["last_screener_df"]
@@ -586,8 +585,8 @@ if "last_screener_df" in st.session_state and not st.session_state["last_screene
         hide_index=True,
         column_order=[
             "Ticker", "Action", "Score", "Price", 
-            "Trend", "Return", "Flow", "Rel Strength", "Vol Exp", 
-            "Drawdown", "52W High", "RSI Band", "Sharpe", "ATR Squeeze"
+            "Trend", "Return", "OBV", "Rel Strength", "MACD", 
+            "Drawdown", "52W High", "RSI Band", "Sharpe", "Flow"
         ],
         column_config={
             "Ticker": st.column_config.TextColumn("Ticker"),
@@ -599,7 +598,6 @@ if "last_screener_df" in st.session_state and not st.session_state["last_screene
         selection_mode="single-row"
     )
 
-    # Open Modal Window on Table Click Selection
     if event and event.selection and event.selection.rows:
         selected_index = event.selection.rows[0]
         selected_ticker = screener_df.iloc[selected_index]["Ticker"]
