@@ -3,20 +3,21 @@ app.py
 ======
 Modular ETF Rule Configurator & Scoring Engine (10 Rules)
 Features:
-- Primary exchange displayed in the main table under "Exchange".
-- Renamed "Total Score" column to "Score".
-- Completely user-managed persistent ticker list across reboots and sessions.
-- Clean scoring engine with direct Action Signals (🟢 BUY / 🟡 HOLD / 🔴 SELL).
-- Dynamic Buy/Hold/Sell action banner inside the Modal Scorecard.
+- Dual Ticker Inputs: Portfolio & Watchlist
+- Categorized Scoring Matrix with "Group" column
+- Removed Exchange column
+- Persistent storage for both ticker groups across reboots
+- Modal detailed scorecard on row click
 """
 
 import os
+import json
 import streamlit as st
 import pandas as pd
 import numpy as np
 import yfinance as yf
 
-TICKERS_FILE = "saved_tickers.txt"
+TICKERS_FILE = "saved_tickers.json"
 
 # Page setup
 st.set_page_config(
@@ -42,26 +43,41 @@ st.markdown("""
 # PERSISTENCE & SESSION STATE
 # ==============================================================================
 
-def load_saved_tickers() -> str:
-    """Loads saved tickers from local file or returns an empty string."""
+def load_saved_tickers() -> dict:
+    """Loads saved portfolio and watchlist tickers from local JSON file."""
     if os.path.exists(TICKERS_FILE):
         try:
             with open(TICKERS_FILE, "r") as f:
-                return f.read().strip()
+                data = json.load(f)
+                return {
+                    "portfolio": data.get("portfolio", "SCHD, VFLO, DIVI, JPST, JAAA"),
+                    "watchlist": data.get("watchlist", "VEA, SCYB, EMXC")
+                }
         except Exception:
             pass
-    return ""
+    return {
+        "portfolio": "SCHD, VFLO, DIVI, JPST, JAAA",
+        "watchlist": "VEA, SCYB, EMXC"
+    }
 
-def save_tickers_to_disk(tickers_str: str):
-    """Saves edited ticker string to local file to persist across reboots."""
+def save_tickers_to_disk(portfolio_str: str, watchlist_str: str):
+    """Saves portfolio and watchlist tickers to disk."""
     try:
         with open(TICKERS_FILE, "w") as f:
-            f.write(tickers_str)
+            json.dump({
+                "portfolio": portfolio_str,
+                "watchlist": watchlist_str
+            }, f, indent=4)
     except Exception:
         pass
 
-if "user_tickers" not in st.session_state:
-    st.session_state["user_tickers"] = load_saved_tickers()
+initial_tickers = load_saved_tickers()
+
+if "portfolio_tickers" not in st.session_state:
+    st.session_state["portfolio_tickers"] = initial_tickers["portfolio"]
+
+if "watchlist_tickers" not in st.session_state:
+    st.session_state["watchlist_tickers"] = initial_tickers["watchlist"]
 
 if "config_df_v2" not in st.session_state:
     st.session_state["config_df_v2"] = pd.DataFrame([
@@ -104,18 +120,6 @@ def fetch_etf_history(ticker: str) -> pd.DataFrame:
     except Exception:
         pass
     return pd.DataFrame()
-
-@st.cache_data(ttl=86400, show_spinner=False)
-def fetch_ticker_exchange(ticker: str) -> str:
-    """Fetches primary exchange for ticker symbol."""
-    ticker_clean = ticker.strip().upper()
-    try:
-        t_obj = yf.Ticker(ticker_clean)
-        info = t_obj.info
-        exchange = info.get("exchange") or info.get("fullExchangeName") or "N/A"
-        return str(exchange).upper()
-    except Exception:
-        return "N/A"
 
 
 # ==============================================================================
@@ -324,8 +328,7 @@ def evaluate_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
 @st.dialog("🔍 Scorecard Breakdown", width="large")
 def show_scorecard_modal(ticker: str, benchmark_df: pd.DataFrame, params: dict):
     """Renders the ETF Scorecard with Buy/Hold/Sell banner inside a popup modal."""
-    exchange_name = fetch_ticker_exchange(ticker)
-    st.subheader(f"Scorecard: {ticker} ({exchange_name})")
+    st.subheader(f"Scorecard: {ticker}")
 
     with st.spinner(f"Analyzing {ticker}..."):
         df = fetch_etf_history(ticker)
@@ -481,35 +484,61 @@ benchmark_df = fetch_etf_history("SPY")
 if not is_points_valid:
     st.error(f"⚠️ Points allocation total is currently {total_raw_points} pts. Please balance weights to 100 in the ⚙️ Sidebar Configurator.")
 
-user_input = st.text_area(
-    "Enter ETF Tickers (comma or space separated):",
-    value=st.session_state["user_tickers"],
-    height=100,
-    placeholder="e.g. VFLO, SCHD, SCYB, JPST, JAAA, VEA, DIVI, EMXC",
-    key="ticker_input_field"
-)
+col_port, col_watch = st.columns(2)
 
-# Detect change in input text area, update state, and save locally
-if user_input != st.session_state["user_tickers"]:
-    st.session_state["user_tickers"] = user_input
-    save_tickers_to_disk(user_input)
+with col_port:
+    portfolio_input = st.text_area(
+        "1. Portfolio Tickers (Holdings):",
+        value=st.session_state["portfolio_tickers"],
+        height=100,
+        placeholder="e.g. SCHD, VFLO, DIVI, JPST, JAAA",
+        key="portfolio_input_field"
+    )
 
-tickers_list = [t.strip().upper() for t in user_input.replace("\n", ",").split(",") if t.strip()]
+with col_watch:
+    watchlist_input = st.text_area(
+        "2. Watching Tickers (Watchlist):",
+        value=st.session_state["watchlist_tickers"],
+        height=100,
+        placeholder="e.g. VEA, SCYB, EMXC",
+        key="watchlist_input_field"
+    )
 
-if st.button("Run Portfolio Screen", type="primary", disabled=not is_points_valid or not tickers_list):
+# Save on change
+if (portfolio_input != st.session_state["portfolio_tickers"]) or (watchlist_input != st.session_state["watchlist_tickers"]):
+    st.session_state["portfolio_tickers"] = portfolio_input
+    st.session_state["watchlist_tickers"] = watchlist_input
+    save_tickers_to_disk(portfolio_input, watchlist_input)
+
+# Parse inputs
+portfolio_list = [t.strip().upper() for t in portfolio_input.replace("\n", ",").split(",") if t.strip()]
+watchlist_list = [t.strip().upper() for t in watchlist_input.replace("\n", ",").split(",") if t.strip()]
+
+# Combine unique tickers while preserving group designation
+ticker_group_map = {}
+for t in portfolio_list:
+    ticker_group_map[t] = "Portfolio"
+for t in watchlist_list:
+    if t in ticker_group_map:
+        ticker_group_map[t] = "Portfolio & Watchlist"
+    else:
+        ticker_group_map[t] = "Watchlist"
+
+all_tickers = list(ticker_group_map.keys())
+
+if st.button("Run Portfolio Screen", type="primary", disabled=not is_points_valid or not all_tickers):
     results = []
     progress_bar = st.progress(0)
     
-    for idx, ticker in enumerate(tickers_list):
+    for idx, ticker in enumerate(all_tickers):
         df = fetch_etf_history(ticker)
         eval_res = evaluate_rules(df, benchmark_df, RULE_PARAMS)
-        exchange = fetch_ticker_exchange(ticker)
         
         if eval_res is not None:
             action_sig, _, _ = derive_action_signal(eval_res["Score"])
             results.append({
                 "Ticker": ticker,
-                "Exchange": exchange,
+                "Group": ticker_group_map[ticker],
                 "Action": action_sig,
                 "Score": eval_res["Score"],
                 "Price_Raw": eval_res['Close'],
@@ -526,7 +555,7 @@ if st.button("Run Portfolio Screen", type="primary", disabled=not is_points_vali
                 "ATR Squeeze": "✅ Pass" if eval_res["Pass_ATR"] else "❌ Fail",
             })
         
-        progress_bar.progress((idx + 1) / len(tickers_list))
+        progress_bar.progress((idx + 1) / len(all_tickers))
 
     progress_bar.empty()
 
@@ -549,13 +578,13 @@ if "last_screener_df" in st.session_state and not st.session_state["last_screene
         screener_df.drop(columns=["Price_Raw"]),
         hide_index=True,
         column_order=[
-            "Ticker", "Exchange", "Action", "Score", "Price", 
+            "Ticker", "Group", "Action", "Score", "Price", 
             "Trend", "Return", "Flow", "Rel Strength", "Vol Exp", 
             "Drawdown", "52W High", "RSI Band", "Sharpe", "ATR Squeeze"
         ],
         column_config={
             "Ticker": st.column_config.TextColumn("Ticker"),
-            "Exchange": st.column_config.TextColumn("Exchange"),
+            "Group": st.column_config.TextColumn("Group"),
             "Action": st.column_config.TextColumn("Signal", help="🟢 BUY (≥70), 🟡 HOLD (45-69), 🔴 SELL (<45)"),
             "Score": st.column_config.NumberColumn("Score", format="%d pts")
         },
