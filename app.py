@@ -6,6 +6,7 @@ Optimized for Weekly Timeframe / Medium-to-Long Term Position Screening.
 
 Features:
 - Resamples daily data to true Weekly candles (W-FRI).
+- Includes SPY explicitly in matrix with N/A benchmark handling.
 - Weekly OBV Trend (Accumulation/Distribution).
 - Weekly MACD (12, 26, 9) Signal Alignment.
 - 10-week vs 30-week EMA Stage Analysis Trend Filter.
@@ -24,7 +25,7 @@ PORTFOLIO_FILE = "saved_portfolio.txt"
 WATCHLIST_FILE = "saved_watchlist.txt"
 
 DEFAULT_PORTFOLIO = "SCHD, VFLO, DIVI, JPST, JAAA"
-DEFAULT_WATCHLIST = "VEA, SCYB, EMXC"
+DEFAULT_WATCHLIST = "SPY, VEA, SCYB, EMXC"
 
 st.set_page_config(
     page_title="Weekly ETF Screener & Rule Engine",
@@ -110,7 +111,6 @@ def fetch_weekly_etf_history(ticker: str) -> pd.DataFrame:
             df = df.loc[:, ~df.columns.duplicated()]
             
             if "Close" in df.columns and len(df) > 60:
-                # Resample daily data to weekly candles
                 weekly_df = pd.DataFrame()
                 weekly_df["Open"] = df["Open"].resample("W-FRI").first()
                 weekly_df["High"] = df["High"].resample("W-FRI").max()
@@ -139,21 +139,22 @@ def calculate_weekly_rsi(series: pd.Series, period: int = 14) -> float:
 
 def derive_action_signal(score: int) -> tuple[str, str, str]:
     if score >= 70:
-        return "🟢 BUY", "success", "Strong multi-week structural momentum and institutional accumulation. Favorable candidate for core portfolio positioning."
+        return "🟢 BUY", "success", "Strong multi-week structural momentum and institutional accumulation."
     elif score >= 45:
-        return "🟡 HOLD", "warning", "Consolidation or neutral weekly trend. Maintain current positioning; wait for a weekly breakout before adding capital."
+        return "🟡 HOLD", "warning", "Consolidation or neutral weekly trend. Maintain current positioning."
     else:
-        return "🔴 SELL", "error", "Weekly technical indicators indicate structural trend decay, elevated drawdown, or sustained capital distribution."
+        return "🔴 SELL", "error", "Weekly technical indicators indicate structural trend decay or drawdown."
 
 
 # ==============================================================================
 # WEEKLY RULE ENGINE
 # ==============================================================================
 
-def evaluate_weekly_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
+def evaluate_weekly_rules(ticker: str, df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
     if df.empty or len(df) < 35:
         return None
 
+    ticker_upper = ticker.strip().upper()
     close = pd.Series(df["Close"].values.flatten())
     volume = pd.Series(df["Volume"].values.flatten()) if "Volume" in df.columns else pd.Series(np.zeros(len(df)))
 
@@ -198,18 +199,29 @@ def evaluate_weekly_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: 
     # 4. Relative Strength vs SPY (12-Week Alpha)
     alpha_pct = 0.0
     rule_rs_passed = False
-    if not benchmark_df.empty and len(benchmark_df) >= lookback_weeks:
-        bench_close = pd.Series(benchmark_df["Close"].values.flatten())
-        bench_latest = float(bench_close.iloc[-1])
-        bench_past = float(bench_close.iloc[-min(lookback_weeks, len(bench_close) - 1)])
-        bench_return = ((bench_latest - bench_past) / bench_past) * 100
-        alpha_pct = period_return_pct - bench_return
-        rule_rs_passed = alpha_pct >= params["min_alpha_pct"]
-    comm_rs = (
-        f"**Data:** 12-Week Alpha vs SPY: {alpha_pct:+.2f}%\n\n"
-        f"**Why it Matters:** Measures true relative outperformance over broad market.\n\n"
-        f"**Expected Range:** ≥ +1.0% Alpha."
-    )
+    rs_display = "❌ Fail"
+    
+    if ticker_upper == "SPY":
+        rs_display = "N/A"
+        comm_rs = (
+            f"**Data:** N/A (Benchmark Baseline)\n\n"
+            f"**Why it Matters:** SPY serves as the baseline benchmark for all other ETFs.\n\n"
+            f"**Expected Range:** Target ≥ +1.0% Alpha over SPY."
+        )
+    else:
+        if not benchmark_df.empty and len(benchmark_df) >= lookback_weeks:
+            bench_close = pd.Series(benchmark_df["Close"].values.flatten())
+            bench_latest = float(bench_close.iloc[-1])
+            bench_past = float(bench_close.iloc[-min(lookback_weeks, len(bench_close) - 1)])
+            bench_return = ((bench_latest - bench_past) / bench_past) * 100
+            alpha_pct = period_return_pct - bench_return
+            rule_rs_passed = alpha_pct >= params["min_alpha_pct"]
+            rs_display = "✅ Pass" if rule_rs_passed else "❌ Fail"
+        comm_rs = (
+            f"**Data:** 12-Week Alpha vs SPY: {alpha_pct:+.2f}%\n\n"
+            f"**Why it Matters:** Measures true relative outperformance over broad market.\n\n"
+            f"**Expected Range:** ≥ +1.0% Alpha."
+        )
 
     # 5. Weekly MACD Alignment
     ema12 = close.ewm(span=12, adjust=False).mean()
@@ -308,7 +320,7 @@ def evaluate_weekly_rules(df: pd.DataFrame, benchmark_df: pd.DataFrame, params: 
         "Pass_MA": rule_ma_passed, "Comm_MA": comm_ma,
         "Pass_Perf": rule_perf_passed, "Comm_Perf": comm_perf,
         "Pass_OBV": rule_obv_passed, "Comm_OBV": comm_obv,
-        "Pass_RS": rule_rs_passed, "Comm_RS": comm_rs,
+        "Pass_RS": rule_rs_passed, "RS_Display": rs_display, "Comm_RS": comm_rs,
         "Pass_MACD": rule_macd_passed, "Comm_MACD": comm_macd,
         "Pass_DD": rule_dd_passed, "Comm_DD": comm_dd,
         "Pass_52W": rule_52w_passed, "Comm_52W": comm_52w,
@@ -328,7 +340,7 @@ def show_scorecard_modal(ticker: str, benchmark_df: pd.DataFrame, params: dict):
 
     with st.spinner(f"Analyzing {ticker} on Weekly scale..."):
         df = fetch_weekly_etf_history(ticker)
-        res = evaluate_weekly_rules(df, benchmark_df, params)
+        res = evaluate_weekly_rules(ticker, df, benchmark_df, params)
 
     if res is not None:
         action_label, action_type, action_desc = derive_action_signal(res["Score"])
@@ -370,9 +382,8 @@ def show_scorecard_modal(ticker: str, benchmark_df: pd.DataFrame, params: dict):
         st.markdown("---")
         c4, c5, c6 = st.columns(3)
         with c4:
-            status_rs = "✅ PASS" if res["Pass_RS"] else "❌ FAIL"
             pts_rs = params['weight_rs'] if res['Pass_RS'] else 0
-            st.metric("4. 12W Rel Strength", status_rs, delta=f"{pts_rs} / {params['weight_rs']} pts")
+            st.metric("4. 12W Rel Strength", res["RS_Display"], delta=f"{pts_rs} / {params['weight_rs']} pts")
             st.info(res["Comm_RS"])
 
         with c5:
@@ -507,7 +518,7 @@ with col_watch:
         "2. Watching Tickers (Watchlist):",
         value=st.session_state["watchlist_tickers"],
         height=100,
-        placeholder="e.g. VEA, SCYB, EMXC",
+        placeholder="e.g. SPY, VEA, SCYB, EMXC",
         key="watchlist_input_field"
     )
     
@@ -538,7 +549,7 @@ if active_tickers:
     
     for idx, ticker in enumerate(active_tickers):
         df = fetch_weekly_etf_history(ticker)
-        eval_res = evaluate_weekly_rules(df, benchmark_df, RULE_PARAMS)
+        eval_res = evaluate_weekly_rules(ticker, df, benchmark_df, RULE_PARAMS)
         
         if eval_res is not None:
             action_sig, _, _ = derive_action_signal(eval_res["Score"])
@@ -551,7 +562,7 @@ if active_tickers:
                 "Trend": "✅ Pass" if eval_res["Pass_MA"] else "❌ Fail",
                 "Return": "✅ Pass" if eval_res["Pass_Perf"] else "❌ Fail",
                 "OBV": "✅ Pass" if eval_res["Pass_OBV"] else "❌ Fail",
-                "Rel Strength": "✅ Pass" if eval_res["Pass_RS"] else "❌ Fail",
+                "Rel Strength": eval_res["RS_Display"],
                 "MACD": "✅ Pass" if eval_res["Pass_MACD"] else "❌ Fail",
                 "Drawdown": "✅ Pass" if eval_res["Pass_DD"] else "❌ Fail",
                 "52W High": "✅ Pass" if eval_res["Pass_52W"] else "❌ Fail",
