@@ -3,21 +3,23 @@ app.py
 ======
 Modular ETF Rule Configurator & Scoring Engine (10 Rules)
 Features:
-- Dual Ticker Inputs: Portfolio & Watchlist
-- Categorized Scoring Matrix with "Group" column
-- Removed Exchange column
-- Persistent storage for both ticker groups across reboots
-- Modal detailed scorecard on row click
+- Independent "Run Portfolio Screen" and "Run Watchlist Screen" buttons.
+- Separate result view for Portfolio vs Watchlist tickers.
+- Reliable text-file persistence across reboots.
+- Modal detailed scorecard on row click.
 """
 
 import os
-import json
 import streamlit as st
 import pandas as pd
 import numpy as np
 import yfinance as yf
 
-TICKERS_FILE = "saved_tickers.json"
+PORTFOLIO_FILE = "saved_portfolio.txt"
+WATCHLIST_FILE = "saved_watchlist.txt"
+
+DEFAULT_PORTFOLIO = "SCHD, VFLO, DIVI, JPST, JAAA"
+DEFAULT_WATCHLIST = "VEA, SCYB, EMXC"
 
 # Page setup
 st.set_page_config(
@@ -43,41 +45,32 @@ st.markdown("""
 # PERSISTENCE & SESSION STATE
 # ==============================================================================
 
-def load_saved_tickers() -> dict:
-    """Loads saved portfolio and watchlist tickers from local JSON file."""
-    if os.path.exists(TICKERS_FILE):
+def load_ticker_file(file_path: str, default_val: str) -> str:
+    """Reads saved tickers from a local text file if present."""
+    if os.path.exists(file_path):
         try:
-            with open(TICKERS_FILE, "r") as f:
-                data = json.load(f)
-                return {
-                    "portfolio": data.get("portfolio", "SCHD, VFLO, DIVI, JPST, JAAA"),
-                    "watchlist": data.get("watchlist", "VEA, SCYB, EMXC")
-                }
+            with open(file_path, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+                if content:
+                    return content
         except Exception:
             pass
-    return {
-        "portfolio": "SCHD, VFLO, DIVI, JPST, JAAA",
-        "watchlist": "VEA, SCYB, EMXC"
-    }
+    return default_val
 
-def save_tickers_to_disk(portfolio_str: str, watchlist_str: str):
-    """Saves portfolio and watchlist tickers to disk."""
+def save_ticker_file(file_path: str, text_content: str):
+    """Writes updated ticker text to a local text file to persist reboots."""
     try:
-        with open(TICKERS_FILE, "w") as f:
-            json.dump({
-                "portfolio": portfolio_str,
-                "watchlist": watchlist_str
-            }, f, indent=4)
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(text_content.strip())
     except Exception:
         pass
 
-initial_tickers = load_saved_tickers()
-
+# Initialize session state values from disk once
 if "portfolio_tickers" not in st.session_state:
-    st.session_state["portfolio_tickers"] = initial_tickers["portfolio"]
+    st.session_state["portfolio_tickers"] = load_ticker_file(PORTFOLIO_FILE, DEFAULT_PORTFOLIO)
 
 if "watchlist_tickers" not in st.session_state:
-    st.session_state["watchlist_tickers"] = initial_tickers["watchlist"]
+    st.session_state["watchlist_tickers"] = load_ticker_file(WATCHLIST_FILE, DEFAULT_WATCHLIST)
 
 if "config_df_v2" not in st.session_state:
     st.session_state["config_df_v2"] = pd.DataFrame([
@@ -474,10 +467,10 @@ RULE_PARAMS = {
 
 
 # ==============================================================================
-# MAIN INTERFACE: PORTFOLIO SCREENER
+# MAIN INTERFACE: PORTFOLIO & WATCHLIST SCREENER
 # ==============================================================================
 
-st.title("🎯 Portfolio ETF Screener & Analysis")
+st.title("🎯 Portfolio & Watchlist ETF Screener")
 
 benchmark_df = fetch_etf_history("SPY")
 
@@ -494,6 +487,18 @@ with col_port:
         placeholder="e.g. SCHD, VFLO, DIVI, JPST, JAAA",
         key="portfolio_input_field"
     )
+    
+    # Save edits to file dynamically
+    if portfolio_input != st.session_state["portfolio_tickers"]:
+        st.session_state["portfolio_tickers"] = portfolio_input
+        save_ticker_file(PORTFOLIO_FILE, portfolio_input)
+        
+    btn_run_portfolio = st.button(
+        "Run Portfolio Screen 💼", 
+        type="primary", 
+        disabled=not is_points_valid or not portfolio_input.strip(),
+        use_container_width=True
+    )
 
 with col_watch:
     watchlist_input = st.text_area(
@@ -503,34 +508,36 @@ with col_watch:
         placeholder="e.g. VEA, SCYB, EMXC",
         key="watchlist_input_field"
     )
+    
+    # Save edits to file dynamically
+    if watchlist_input != st.session_state["watchlist_tickers"]:
+        st.session_state["watchlist_tickers"] = watchlist_input
+        save_ticker_file(WATCHLIST_FILE, watchlist_input)
 
-# Save on change
-if (portfolio_input != st.session_state["portfolio_tickers"]) or (watchlist_input != st.session_state["watchlist_tickers"]):
-    st.session_state["portfolio_tickers"] = portfolio_input
-    st.session_state["watchlist_tickers"] = watchlist_input
-    save_tickers_to_disk(portfolio_input, watchlist_input)
+    btn_run_watchlist = st.button(
+        "Run Watchlist Screen 👀", 
+        type="primary", 
+        disabled=not is_points_valid or not watchlist_input.strip(),
+        use_container_width=True
+    )
 
-# Parse inputs
-portfolio_list = [t.strip().upper() for t in portfolio_input.replace("\n", ",").split(",") if t.strip()]
-watchlist_list = [t.strip().upper() for t in watchlist_input.replace("\n", ",").split(",") if t.strip()]
+# Determine execution trigger
+active_tickers = []
+screen_title = ""
 
-# Combine unique tickers while preserving group designation
-ticker_group_map = {}
-for t in portfolio_list:
-    ticker_group_map[t] = "Portfolio"
-for t in watchlist_list:
-    if t in ticker_group_map:
-        ticker_group_map[t] = "Portfolio & Watchlist"
-    else:
-        ticker_group_map[t] = "Watchlist"
+if btn_run_portfolio:
+    active_tickers = [t.strip().upper() for t in portfolio_input.replace("\n", ",").split(",") if t.strip()]
+    screen_title = "Portfolio Holdings Scoring Matrix"
+elif btn_run_watchlist:
+    active_tickers = [t.strip().upper() for t in watchlist_input.replace("\n", ",").split(",") if t.strip()]
+    screen_title = "Watchlist Scoring Matrix"
 
-all_tickers = list(ticker_group_map.keys())
-
-if st.button("Run Portfolio Screen", type="primary", disabled=not is_points_valid or not all_tickers):
+# Execution Routine
+if active_tickers:
     results = []
     progress_bar = st.progress(0)
     
-    for idx, ticker in enumerate(all_tickers):
+    for idx, ticker in enumerate(active_tickers):
         df = fetch_etf_history(ticker)
         eval_res = evaluate_rules(df, benchmark_df, RULE_PARAMS)
         
@@ -538,7 +545,6 @@ if st.button("Run Portfolio Screen", type="primary", disabled=not is_points_vali
             action_sig, _, _ = derive_action_signal(eval_res["Score"])
             results.append({
                 "Ticker": ticker,
-                "Group": ticker_group_map[ticker],
                 "Action": action_sig,
                 "Score": eval_res["Score"],
                 "Price_Raw": eval_res['Close'],
@@ -555,7 +561,7 @@ if st.button("Run Portfolio Screen", type="primary", disabled=not is_points_vali
                 "ATR Squeeze": "✅ Pass" if eval_res["Pass_ATR"] else "❌ Fail",
             })
         
-        progress_bar.progress((idx + 1) / len(all_tickers))
+        progress_bar.progress((idx + 1) / len(active_tickers))
 
     progress_bar.empty()
 
@@ -563,13 +569,14 @@ if st.button("Run Portfolio Screen", type="primary", disabled=not is_points_vali
         res_df = pd.DataFrame(results)
         res_df = res_df.sort_values(by="Score", ascending=False).reset_index(drop=True)
         st.session_state["last_screener_df"] = res_df
+        st.session_state["last_screener_title"] = screen_title
     else:
         st.warning("Could not retrieve valid historical data for any provided tickers.")
 
 
 # Display interactive results table
 if "last_screener_df" in st.session_state and not st.session_state["last_screener_df"].empty:
-    st.subheader("Portfolio Scoring Matrix")
+    st.subheader(st.session_state.get("last_screener_title", "Scoring Matrix Results"))
     st.caption("💡 Select any row to pop open its detailed Scorecard modal window.")
 
     screener_df = st.session_state["last_screener_df"]
@@ -578,13 +585,12 @@ if "last_screener_df" in st.session_state and not st.session_state["last_screene
         screener_df.drop(columns=["Price_Raw"]),
         hide_index=True,
         column_order=[
-            "Ticker", "Group", "Action", "Score", "Price", 
+            "Ticker", "Action", "Score", "Price", 
             "Trend", "Return", "Flow", "Rel Strength", "Vol Exp", 
             "Drawdown", "52W High", "RSI Band", "Sharpe", "ATR Squeeze"
         ],
         column_config={
             "Ticker": st.column_config.TextColumn("Ticker"),
-            "Group": st.column_config.TextColumn("Group"),
             "Action": st.column_config.TextColumn("Signal", help="🟢 BUY (≥70), 🟡 HOLD (45-69), 🔴 SELL (<45)"),
             "Score": st.column_config.NumberColumn("Score", format="%d pts")
         },
