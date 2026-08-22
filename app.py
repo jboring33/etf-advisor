@@ -5,13 +5,14 @@ Weekly ETF Rule Configurator & Scoring Engine (10 Rules)
 Optimized for Weekly Timeframe / Medium-to-Long Term Position Screening.
 
 Features:
+- Pure URL Query Parameter Persistence (st.query_params).
+- Zero fallback defaults: tickers persist entirely via the browser URL parameters.
 - Resamples daily data to true Weekly candles (W-FRI).
 - Includes SPY explicitly in matrix with N/A benchmark handling.
 - Weekly OBV Trend (Accumulation/Distribution).
 - Weekly MACD (12, 26, 9) Signal Alignment.
 - 10-week vs 30-week EMA Stage Analysis Trend Filter.
 - Independent Portfolio & Watchlist Screens.
-- Disk-backed ticker persistence.
 - Modal scorecard window on row selection.
 """
 
@@ -20,12 +21,6 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import yfinance as yf
-
-PORTFOLIO_FILE = "saved_portfolio.txt"
-WATCHLIST_FILE = "saved_watchlist.txt"
-
-DEFAULT_PORTFOLIO = "SCHD, VFLO, DIVI, JPST, JAAA"
-DEFAULT_WATCHLIST = "SPY, VEA, SCYB, EMXC"
 
 st.set_page_config(
     page_title="Weekly ETF Screener & Rule Engine",
@@ -46,32 +41,20 @@ st.markdown("""
 
 
 # ==============================================================================
-# PERSISTENCE & SESSION STATE
+# URL QUERY PARAMETER PERSISTENCE (NO DEFAULTS)
 # ==============================================================================
 
-def load_ticker_file(file_path: str, default_val: str) -> str:
-    if os.path.exists(file_path):
-        try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                content = f.read().strip()
-                if content:
-                    return content
-        except Exception:
-            pass
-    return default_val
+query_params = st.query_params
 
-def save_ticker_file(file_path: str, text_content: str):
-    try:
-        with open(file_path, "w", encoding="utf-8") as f:
-            f.write(text_content.strip())
-    except Exception:
-        pass
+# Read initial tickers from URL query parameters (defaults to empty string if missing)
+initial_portfolio = query_params.get("portfolio", "")
+initial_watchlist = query_params.get("watchlist", "")
 
 if "portfolio_tickers" not in st.session_state:
-    st.session_state["portfolio_tickers"] = load_ticker_file(PORTFOLIO_FILE, DEFAULT_PORTFOLIO)
+    st.session_state["portfolio_tickers"] = initial_portfolio
 
 if "watchlist_tickers" not in st.session_state:
-    st.session_state["watchlist_tickers"] = load_ticker_file(WATCHLIST_FILE, DEFAULT_WATCHLIST)
+    st.session_state["watchlist_tickers"] = initial_watchlist
 
 if "config_df_v2" not in st.session_state:
     st.session_state["config_df_v2"] = pd.DataFrame([
@@ -504,7 +487,7 @@ with col_port:
     
     if portfolio_input != st.session_state["portfolio_tickers"]:
         st.session_state["portfolio_tickers"] = portfolio_input
-        save_ticker_file(PORTFOLIO_FILE, portfolio_input)
+        st.query_params["portfolio"] = portfolio_input
         
     btn_run_portfolio = st.button(
         "Run Portfolio Screen 💼", 
@@ -518,13 +501,13 @@ with col_watch:
         "2. Watching Tickers (Watchlist):",
         value=st.session_state["watchlist_tickers"],
         height=100,
-        placeholder="e.g. SPY, VEA, SCYB, EMXC",
+        placeholder="e.g. SPY, DIA, QQQ, VEA, ACWX, EMXC",
         key="watchlist_input_field"
     )
     
     if watchlist_input != st.session_state["watchlist_tickers"]:
         st.session_state["watchlist_tickers"] = watchlist_input
-        save_ticker_file(WATCHLIST_FILE, watchlist_input)
+        st.query_params["watchlist"] = watchlist_input
 
     btn_run_watchlist = st.button(
         "Run Watchlist Screen 👀", 
