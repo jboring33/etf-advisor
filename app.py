@@ -43,15 +43,15 @@ def get_url_tickers() -> str:
     except Exception:
         return ""
 
-# Get tickers from URL query string
+# Parse tickers from URL at script start
 url_tickers_clean = get_url_tickers()
 
-# Initialize session state for input BEFORE widget instantiation
+# Force-populate session state BEFORE the text_area widget is instantiated
 if "tickers_input_field" not in st.session_state or not st.session_state["tickers_input_field"]:
     if url_tickers_clean:
         st.session_state["tickers_input_field"] = url_tickers_clean
 
-# Update URL if session state changes
+# Update URL parameters when the user edits the input box
 def sync_query_params():
     current_val = st.session_state.get("tickers_input_field", "")
     if current_val:
@@ -399,7 +399,7 @@ benchmark_df = fetch_weekly_etf_history("SPY")
 if not is_points_valid:
     st.error(f"⚠️ Points allocation total is currently {total_raw_points} pts. Please balance weights to 100 in the ⚙️ Sidebar Configurator.")
 
-# Declarative input widget using explicitly assigned session_state value
+# Input text area explicitly bound to session_state
 tickers_input = st.text_area(
     "Tickers to Score:",
     value=st.session_state.get("tickers_input_field", ""),
@@ -416,7 +416,7 @@ btn_run_screen = st.button(
     use_container_width=True
 )
 
-# Explicit execution condition
+# Trigger auto-run on initial load if URL parameters exist, or on manual click
 should_run = btn_run_screen or ("auto_ran_on_load" not in st.session_state and bool(tickers_input.strip()))
 
 if should_run:
