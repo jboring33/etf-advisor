@@ -34,7 +34,7 @@ st.markdown("""
 # ==============================================================================
 
 def get_url_tickers() -> str:
-    """Safely extracts 'tickers' parameter from URL query params regardless of format."""
+    """Safely extracts 'tickers' parameter from URL query params."""
     try:
         raw_val = st.query_params.get("tickers", "")
         if isinstance(raw_val, list):
@@ -43,17 +43,15 @@ def get_url_tickers() -> str:
     except Exception:
         return ""
 
-# Parse tickers from URL at script start
 url_tickers_clean = get_url_tickers()
 
-# Force-populate session state BEFORE the text_area widget is instantiated
-if "tickers_input_field" not in st.session_state or not st.session_state["tickers_input_field"]:
-    if url_tickers_clean:
-        st.session_state["tickers_input_field"] = url_tickers_clean
+# Initialize session_state key EXACTLY ONCE before the widget renders
+if "tickers_input_field" not in st.session_state:
+    st.session_state["tickers_input_field"] = url_tickers_clean if url_tickers_clean else "SPY, SCHD, VFLO, QQQ"
 
-# Update URL parameters when the user edits the input box
+# Sync session state back to URL query params
 def sync_query_params():
-    current_val = st.session_state.get("tickers_input_field", "")
+    current_val = st.session_state.get("tickers_input_field", "").strip()
     if current_val:
         st.query_params["tickers"] = current_val
     elif "tickers" in st.query_params:
@@ -399,10 +397,9 @@ benchmark_df = fetch_weekly_etf_history("SPY")
 if not is_points_valid:
     st.error(f"⚠️ Points allocation total is currently {total_raw_points} pts. Please balance weights to 100 in the ⚙️ Sidebar Configurator.")
 
-# Input text area explicitly bound to session_state
+# Text area bound directly to key
 tickers_input = st.text_area(
     "Tickers to Score:",
-    value=st.session_state.get("tickers_input_field", ""),
     height=120,
     placeholder="Enter tickers separated by commas (e.g. SPY, SCHD, VFLO, QQQ)...",
     key="tickers_input_field",
@@ -416,7 +413,6 @@ btn_run_screen = st.button(
     use_container_width=True
 )
 
-# Trigger auto-run on initial load if URL parameters exist, or on manual click
 should_run = btn_run_screen or ("auto_ran_on_load" not in st.session_state and bool(tickers_input.strip()))
 
 if should_run:
@@ -462,7 +458,6 @@ if should_run:
     else:
         st.warning("Could not retrieve valid historical data for any provided tickers.")
 
-# Display interactive results table
 if "last_screener_df" in st.session_state and not st.session_state["last_screener_df"].empty:
     st.subheader(st.session_state.get("last_screener_title", "Weekly Scoring Matrix Results"))
     st.caption("💡 Select any row to pop open its detailed Scorecard modal window.")
