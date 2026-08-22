@@ -6,12 +6,10 @@ Optimized for Weekly Timeframe / Medium-to-Long Term Position Screening.
 
 Features:
 - Pure URL Query Parameter Persistence via `st.query_params["tickers"]`.
+- Fixed URL-to-Session State synchronization on load.
 - Single unified input field ("Tickers to Score") with zero hardcoded default lists.
 - Resamples daily data to true Weekly candles (W-FRI).
 - Includes SPY explicitly in matrix with N/A benchmark handling.
-- Weekly OBV Trend (Accumulation/Distribution).
-- Weekly MACD (12, 26, 9) Signal Alignment.
-- 10-week vs 30-week EMA Stage Analysis Trend Filter.
 - Modal scorecard window on row selection.
 """
 
@@ -40,16 +38,15 @@ st.markdown("""
 
 
 # ==============================================================================
-# URL QUERY PARAMETER PERSISTENCE (NO DEFAULTS)
+# URL QUERY PARAMETER SYNCHRONIZATION
 # ==============================================================================
 
-query_params = st.query_params
+# Fetch tickers directly from URL query parameters
+url_tickers = st.query_params.get("tickers", "")
 
-# Read initial tickers string from URL parameter (defaults to empty string)
-initial_tickers = query_params.get("tickers", "")
-
-if "active_tickers_str" not in st.session_state:
-    st.session_state["active_tickers_str"] = initial_tickers
+# Initialize widget state directly from URL if not already present in session_state
+if "tickers_input_field" not in st.session_state:
+    st.session_state["tickers_input_field"] = url_tickers
 
 if "config_df_v2" not in st.session_state:
     st.session_state["config_df_v2"] = pd.DataFrame([
@@ -469,17 +466,17 @@ benchmark_df = fetch_weekly_etf_history("SPY")
 if not is_points_valid:
     st.error(f"⚠️ Points allocation total is currently {total_raw_points} pts. Please balance weights to 100 in the ⚙️ Sidebar Configurator.")
 
+# Callback to update st.query_params whenever user types in the input box
+def sync_query_params():
+    st.query_params["tickers"] = st.session_state["tickers_input_field"]
+
 tickers_input = st.text_area(
     "Tickers to Score:",
-    value=st.session_state["active_tickers_str"],
     height=120,
     placeholder="Enter tickers separated by commas (e.g. SPY, SCHD, VFLO, QQQ)...",
-    key="tickers_input_field"
+    key="tickers_input_field",
+    on_change=sync_query_params
 )
-
-if tickers_input != st.session_state["active_tickers_str"]:
-    st.session_state["active_tickers_str"] = tickers_input
-    st.query_params["tickers"] = tickers_input
 
 btn_run_screen = st.button(
     "Run Ticker Screen 🚀", 
@@ -488,7 +485,10 @@ btn_run_screen = st.button(
     use_container_width=True
 )
 
-if btn_run_screen:
+# Run if button is clicked OR automatically on first load if tickers exist in query params
+should_run = btn_run_screen or ("last_screener_df" not in st.session_state and bool(tickers_input.strip()))
+
+if should_run:
     active_tickers = [t.strip().upper() for t in tickers_input.replace("\n", ",").split(",") if t.strip()]
     
     results = []
