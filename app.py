@@ -30,32 +30,50 @@ st.markdown("""
 
 
 # ==============================================================================
-# SAFE URL & SESSION STATE SYNCHRONIZATION
+# EXACT URL & SESSION STATE SYNCHRONIZATION (UPPERCASE ENFORCED)
 # ==============================================================================
 
 def get_url_tickers() -> str:
-    """Safely extracts 'tickers' parameter from URL query params."""
+    """Extracts ticker query parameter matching any casing and returns it converted to UPPERCASE."""
     try:
-        raw_val = st.query_params.get("tickers", "")
+        params_lower = {str(k).lower(): v for k, v in st.query_params.items()}
+        raw_val = ""
+        if "tickers" in params_lower:
+            raw_val = params_lower["tickers"]
+        elif "ticker" in params_lower:
+            raw_val = params_lower["ticker"]
+
         if isinstance(raw_val, list):
-            return raw_val[0] if raw_val else ""
-        return str(raw_val) if raw_val else ""
+            raw_val = raw_val[0] if raw_val else ""
+        
+        return str(raw_val).upper().strip() if raw_val else ""
     except Exception:
-        return ""
+        pass
+    return ""
 
 url_tickers_clean = get_url_tickers()
 
-# Initialize session_state key EXACTLY ONCE before the widget renders
-if "tickers_input_field" not in st.session_state:
-    st.session_state["tickers_input_field"] = url_tickers_clean if url_tickers_clean else "SPY, SCHD, VFLO, QQQ"
+# Initialize session state in ALL CAPS if URL params exist
+if url_tickers_clean:
+    st.session_state["tickers_input_field"] = url_tickers_clean
+elif "tickers_input_field" not in st.session_state:
+    st.session_state["tickers_input_field"] = ""
 
-# Sync session state back to URL query params
-def sync_query_params():
-    current_val = st.session_state.get("tickers_input_field", "").strip()
-    if current_val:
-        st.query_params["tickers"] = current_val
-    elif "tickers" in st.query_params:
-        del st.query_params["tickers"]
+def sync_and_uppercase_params():
+    """Callback function: Uppercases any input in the text area and updates URL query params."""
+    current_val = st.session_state.get("tickers_input_field", "")
+    
+    # Force input field content to UPPERCASE
+    upper_val = current_val.upper().strip()
+    st.session_state["tickers_input_field"] = upper_val
+    
+    # Sync uppercase string to URL
+    if upper_val:
+        st.query_params["tickers"] = upper_val
+    else:
+        for k in list(st.query_params.keys()):
+            if k.lower() in ["tickers", "ticker"]:
+                del st.query_params[k]
 
 if "config_df_v2" not in st.session_state:
     st.session_state["config_df_v2"] = pd.DataFrame([
@@ -397,13 +415,12 @@ benchmark_df = fetch_weekly_etf_history("SPY")
 if not is_points_valid:
     st.error(f"⚠️ Points allocation total is currently {total_raw_points} pts. Please balance weights to 100 in the ⚙️ Sidebar Configurator.")
 
-# Text area bound directly to key
+# Text area automatically triggers sync_and_uppercase_params on edit
 tickers_input = st.text_area(
     "Tickers to Score:",
     height=120,
-    placeholder="Enter tickers separated by commas (e.g. SPY, SCHD, VFLO, QQQ)...",
     key="tickers_input_field",
-    on_change=sync_query_params
+    on_change=sync_and_uppercase_params
 )
 
 btn_run_screen = st.button(
