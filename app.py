@@ -5,14 +5,13 @@ Weekly ETF Rule Configurator & Scoring Engine (10 Rules)
 Optimized for Weekly Timeframe / Medium-to-Long Term Position Screening.
 
 Features:
-- Pure URL Query Parameter Persistence (st.query_params).
-- Zero fallback defaults: tickers persist entirely via the browser URL parameters.
+- Pure URL Query Parameter Persistence via `st.query_params["tickers"]`.
+- Single unified input field ("Tickers to Score") with zero hardcoded default lists.
 - Resamples daily data to true Weekly candles (W-FRI).
 - Includes SPY explicitly in matrix with N/A benchmark handling.
 - Weekly OBV Trend (Accumulation/Distribution).
 - Weekly MACD (12, 26, 9) Signal Alignment.
 - 10-week vs 30-week EMA Stage Analysis Trend Filter.
-- Independent Portfolio & Watchlist Screens.
 - Modal scorecard window on row selection.
 """
 
@@ -46,15 +45,11 @@ st.markdown("""
 
 query_params = st.query_params
 
-# Read initial tickers from URL query parameters (defaults to empty string if missing)
-initial_portfolio = query_params.get("portfolio", "")
-initial_watchlist = query_params.get("watchlist", "")
+# Read initial tickers string from URL parameter (defaults to empty string)
+initial_tickers = query_params.get("tickers", "")
 
-if "portfolio_tickers" not in st.session_state:
-    st.session_state["portfolio_tickers"] = initial_portfolio
-
-if "watchlist_tickers" not in st.session_state:
-    st.session_state["watchlist_tickers"] = initial_watchlist
+if "active_tickers_str" not in st.session_state:
+    st.session_state["active_tickers_str"] = initial_tickers
 
 if "config_df_v2" not in st.session_state:
     st.session_state["config_df_v2"] = pd.DataFrame([
@@ -474,59 +469,28 @@ benchmark_df = fetch_weekly_etf_history("SPY")
 if not is_points_valid:
     st.error(f"⚠️ Points allocation total is currently {total_raw_points} pts. Please balance weights to 100 in the ⚙️ Sidebar Configurator.")
 
-col_port, col_watch = st.columns(2)
+tickers_input = st.text_area(
+    "Tickers to Score:",
+    value=st.session_state["active_tickers_str"],
+    height=120,
+    placeholder="Enter tickers separated by commas (e.g. SPY, SCHD, VFLO, QQQ)...",
+    key="tickers_input_field"
+)
 
-with col_port:
-    portfolio_input = st.text_area(
-        "1. Portfolio Tickers (Holdings):",
-        value=st.session_state["portfolio_tickers"],
-        height=100,
-        placeholder="e.g. SCHD, VFLO, DIVI, JPST, JAAA",
-        key="portfolio_input_field"
-    )
+if tickers_input != st.session_state["active_tickers_str"]:
+    st.session_state["active_tickers_str"] = tickers_input
+    st.query_params["tickers"] = tickers_input
+
+btn_run_screen = st.button(
+    "Run Ticker Screen 🚀", 
+    type="primary", 
+    disabled=not is_points_valid or not tickers_input.strip(),
+    use_container_width=True
+)
+
+if btn_run_screen:
+    active_tickers = [t.strip().upper() for t in tickers_input.replace("\n", ",").split(",") if t.strip()]
     
-    if portfolio_input != st.session_state["portfolio_tickers"]:
-        st.session_state["portfolio_tickers"] = portfolio_input
-        st.query_params["portfolio"] = portfolio_input
-        
-    btn_run_portfolio = st.button(
-        "Run Portfolio Screen 💼", 
-        type="primary", 
-        disabled=not is_points_valid or not portfolio_input.strip(),
-        use_container_width=True
-    )
-
-with col_watch:
-    watchlist_input = st.text_area(
-        "2. Watching Tickers (Watchlist):",
-        value=st.session_state["watchlist_tickers"],
-        height=100,
-        placeholder="e.g. SPY, DIA, QQQ, VEA, ACWX, EMXC",
-        key="watchlist_input_field"
-    )
-    
-    if watchlist_input != st.session_state["watchlist_tickers"]:
-        st.session_state["watchlist_tickers"] = watchlist_input
-        st.query_params["watchlist"] = watchlist_input
-
-    btn_run_watchlist = st.button(
-        "Run Watchlist Screen 👀", 
-        type="primary", 
-        disabled=not is_points_valid or not watchlist_input.strip(),
-        use_container_width=True
-    )
-
-active_tickers = []
-screen_title = ""
-
-if btn_run_portfolio:
-    active_tickers = [t.strip().upper() for t in portfolio_input.replace("\n", ",").split(",") if t.strip()]
-    screen_title = "Portfolio Holdings Weekly Scoring Matrix"
-elif btn_run_watchlist:
-    active_tickers = [t.strip().upper() for t in watchlist_input.replace("\n", ",").split(",") if t.strip()]
-    screen_title = "Watchlist Weekly Scoring Matrix"
-
-if active_tickers:
     results = []
     progress_bar = st.progress(0)
     
@@ -562,7 +526,7 @@ if active_tickers:
         res_df = pd.DataFrame(results)
         res_df = res_df.sort_values(by="Score", ascending=False).reset_index(drop=True)
         st.session_state["last_screener_df"] = res_df
-        st.session_state["last_screener_title"] = screen_title
+        st.session_state["last_screener_title"] = "Weekly Scoring Matrix Results"
     else:
         st.warning("Could not retrieve valid historical data for any provided tickers.")
 
