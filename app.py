@@ -3,8 +3,7 @@ app.py
 ======
 Weekly ETF Screener & Rule Engine (10 Rules)
 Optimized for Weekly Timeframe / Medium-to-Long Term Position Screening.
-Includes metadata header cards, interactive candlestick chart inside the detailed modal window,
-and bulletproof URL query parameter state synchronization.
+Includes metadata header cards inside the detailed modal window.
 """
 
 import os
@@ -12,7 +11,6 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import yfinance as yf
-import plotly.graph_objects as go
 
 st.set_page_config(
     page_title="Weekly ETF Screener & Rule Engine",
@@ -33,7 +31,7 @@ st.markdown("""
 
 
 # ==============================================================================
-# CONTAINER 1: EXACT URL & SESSION STATE SYNCHRONIZATION (UPPERCASE ENFORCED)
+# EXACT URL & SESSION STATE SYNCHRONIZATION (UPPERCASE ENFORCED)
 # ==============================================================================
 
 def get_url_tickers() -> str:
@@ -46,35 +44,31 @@ def get_url_tickers() -> str:
         elif "ticker" in params_lower:
             raw_val = params_lower["ticker"]
 
-        # Handle list vs comma-separated string inputs gracefully without dropping items
         if isinstance(raw_val, list):
-            raw_val = ",".join([str(x) for x in raw_val if x])
+            raw_val = raw_val[0] if raw_val else ""
         
         return str(raw_val).upper().strip() if raw_val else ""
     except Exception:
         pass
     return ""
 
-# Initialize session state from URL parameters BEFORE widget rendering
-if "tickers_input_field" not in st.session_state:
-    url_val = get_url_tickers()
-    st.session_state["tickers_input_field"] = url_val if url_val else ""
-elif not st.session_state["tickers_input_field"]:
-    url_val = get_url_tickers()
-    if url_val:
-        st.session_state["tickers_input_field"] = url_val
+url_tickers_clean = get_url_tickers()
+
+# Initialize session state in ALL CAPS if URL params exist
+if url_tickers_clean:
+    st.session_state["tickers_input_field"] = url_tickers_clean
+elif "tickers_input_field" not in st.session_state:
+    st.session_state["tickers_input_field"] = ""
 
 def sync_and_uppercase_params():
     """Callback function: Uppercases any input in the text area and updates URL query params."""
     current_val = st.session_state.get("tickers_input_field", "")
     
-    # Clean whitespace and join into uppercase comma list
-    raw_list = [t.strip().upper() for t in current_val.replace("\n", ",").split(",") if t.strip()]
-    upper_val = ",".join(raw_list)
-    
+    # Force input field content to UPPERCASE
+    upper_val = current_val.upper().strip()
     st.session_state["tickers_input_field"] = upper_val
     
-    # Sync query params with session state
+    # Sync uppercase string to URL
     if upper_val:
         st.query_params["tickers"] = upper_val
     else:
@@ -98,7 +92,7 @@ if "config_df_v2" not in st.session_state:
 
 
 # ==============================================================================
-# CONTAINER 2: DATA FETCHING, METADATA & WEEKLY RESAMPLING
+# DATA FETCHING, METADATA & WEEKLY RESAMPLING
 # ==============================================================================
 
 @st.cache_data(ttl=1800, show_spinner=False)
@@ -190,7 +184,7 @@ def fetch_weekly_etf_history(ticker: str) -> tuple[pd.DataFrame, dict]:
 
 
 # ==============================================================================
-# CONTAINER 3: TECHNICAL HELPER FUNCTIONS & WEEKLY RULE ENGINE
+# TECHNICAL HELPER FUNCTIONS
 # ==============================================================================
 
 def calculate_weekly_rsi(series: pd.Series, period: int = 14) -> float:
@@ -209,6 +203,11 @@ def derive_action_signal(score: int) -> tuple[str, str, str]:
         return "🟡 HOLD", "warning", "Consolidation or neutral weekly trend. Maintain current positioning."
     else:
         return "🔴 SELL", "error", "Weekly technical indicators indicate structural trend decay or drawdown."
+
+
+# ==============================================================================
+# WEEKLY RULE ENGINE
+# ==============================================================================
 
 def evaluate_weekly_rules(ticker: str, df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
     if df.empty or len(df) < 35:
@@ -400,7 +399,7 @@ def evaluate_weekly_rules(ticker: str, df: pd.DataFrame, benchmark_df: pd.DataFr
 
 
 # ==============================================================================
-# CONTAINER 4: MODAL SCORECARD WINDOW (@st.dialog)
+# MODAL SCORECARD WINDOW (@st.dialog)
 # ==============================================================================
 
 @st.dialog("🔍 Detailed Scorecard Window", width="large")
@@ -409,7 +408,7 @@ def show_scorecard_modal(ticker: str, benchmark_df: pd.DataFrame, params: dict):
         df, meta = fetch_weekly_etf_history(ticker)
         res = evaluate_weekly_rules(ticker, df, benchmark_df, params)
 
-    # Header with Metadata Cards (Prevents Table Horizontal Overflow)
+    # 1. Header with Metadata Cards (Prevents Table Horizontal Overflow)
     st.subheader(f"{meta['name']} ({ticker})")
     
     m_col1, m_col2 = st.columns(2)
@@ -421,40 +420,9 @@ def show_scorecard_modal(ticker: str, benchmark_df: pd.DataFrame, params: dict):
     with st.expander("📖 ETF Summary & Profile Description", expanded=False):
         st.write(meta["description"])
 
-    # Interactive Candlestick Chart in Expander (Below Summary, Above Scores)
-    with st.expander("📊 Weekly Candlestick Price Chart", expanded=False):
-        if not df.empty and all(col in df.columns for col in ["Date", "Open", "High", "Low", "Close"]):
-            fig = go.Figure(
-                data=[
-                    go.Candlestick(
-                        x=df["Date"],
-                        open=df["Open"],
-                        high=df["High"],
-                        low=df["Low"],
-                        close=df["Close"],
-                        increasing_line_color="#002b00",  # Dark Green border/wick for up candles
-                        increasing_fillcolor="#26a69a",   # Solid green fill for up candles
-                        decreasing_line_color="#ef5350",  # Red border/wick for down candles
-                        decreasing_fillcolor="#ef5350"   # Solid red fill for down candles
-                    )
-                ]
-            )
-            fig.update_layout(
-                title=f"{ticker} Weekly Price Movement (2-Year History)",
-                xaxis_title="Date",
-                yaxis_title="Price ($)",
-                xaxis_rangeslider_visible=False,
-                margin=dict(l=20, r=20, t=40, b=20),
-                height=450,
-                template="plotly_white"
-            )
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.warning("Insufficient historical price data to display candlestick chart.")
-
     st.markdown("---")
 
-    # Performance & Signal Metrics
+    # 2. Performance & Signal Metrics
     if res is not None:
         action_label, action_type, action_desc = derive_action_signal(res["Score"])
 
@@ -471,7 +439,7 @@ def show_scorecard_modal(ticker: str, benchmark_df: pd.DataFrame, params: dict):
 
         st.markdown("---")
         
-        # 10 Technical Rule Breakdown Cards
+        # 3. 10 Technical Rule Breakdown Cards
         c1, c2, c3 = st.columns(3)
         with c1:
             st.metric("1. Weekly Trend", "✅ PASS" if res["Pass_MA"] else "❌ FAIL", delta=f"{params['weight_ma'] if res['Pass_MA'] else 0} / {params['weight_ma']} pts")
@@ -517,7 +485,7 @@ def show_scorecard_modal(ticker: str, benchmark_df: pd.DataFrame, params: dict):
 
 
 # ==============================================================================
-# CONTAINER 5: SIDEBAR & MAIN SCREENING INTERFACE
+# SIDEBAR
 # ==============================================================================
 
 with st.sidebar:
@@ -561,6 +529,11 @@ RULE_PARAMS = {
     "min_sharpe": 0.5, "weight_sharpe": int(weights[8]),
     "min_flow_score": 50.0, "weight_flow": int(weights[9])
 }
+
+
+# ==============================================================================
+# MAIN INTERFACE
+# ==============================================================================
 
 st.title("🎯 Weekly ETF Screener & Analysis")
 
@@ -634,7 +607,7 @@ if "last_screener_df" in st.session_state and not st.session_state["last_screene
 
     screener_df = st.session_state["last_screener_df"]
     
-    # Main Dataframe table rendered without wide metadata text columns to prevent horizontal scrolling
+    # Clean table layout without wide text fields to eliminate horizontal scroll issues
     event = st.dataframe(
         screener_df.drop(columns=["Price_Raw"]),
         hide_index=True,
