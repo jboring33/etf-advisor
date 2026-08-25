@@ -109,19 +109,47 @@ def fetch_weekly_etf_history(ticker: str) -> pd.DataFrame:
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_etf_metadata(ticker: str) -> dict:
-    """Fetches ETF description, region, and category asset class details."""
+    """Robust fallback metadata extraction for ETFs/Equities from yfinance."""
+    ticker_clean = ticker.strip().upper()
     try:
-        info = yf.Ticker(ticker).info
+        t = yf.Ticker(ticker_clean)
+        info = t.info if t and hasattr(t, 'info') and isinstance(t.info, dict) else {}
+        
+        # Robust resolution for Description
+        desc = (
+            info.get("longBusinessSummary") or 
+            info.get("description") or 
+            info.get("fundSummary") or 
+            f"No summary available for {ticker_clean}."
+        )
+        
+        # Robust resolution for Geographic Area
+        geo = (
+            info.get("region") or 
+            info.get("country") or 
+            info.get("market") or 
+            ("US" if info.get("exchange") in ["NYQ", "NMS", "NAS", "PCX", "ARC"] else "US / Global")
+        )
+        
+        # Robust resolution for Category / ETF Type
+        cat = (
+            info.get("category") or 
+            info.get("categoryName") or 
+            info.get("quoteType") or 
+            info.get("assetClass") or 
+            "Equity / ETF"
+        )
+        
         return {
-            "description": info.get("longBusinessSummary", info.get("description", "No description available.")),
-            "region": info.get("region", info.get("country", "Global / Unclassified")),
-            "category": info.get("category", info.get("quoteType", "ETF / Equity"))
+            "description": str(desc),
+            "region": str(geo).upper() if len(str(geo)) <= 3 else str(geo).title(),
+            "category": str(cat).title()
         }
     except Exception:
         return {
-            "description": "Information unavailable.",
-            "region": "Unknown",
-            "category": "Unknown"
+            "description": f"Details unavailable for {ticker_clean}.",
+            "region": "US / Global",
+            "category": "Equity / ETF"
         }
 
 #
@@ -346,7 +374,7 @@ def show_scorecard_modal(ticker: str, benchmark_df: pd.DataFrame, params: dict):
         res = evaluate_weekly_rules(ticker, df, benchmark_df, params)
         
         if res is not None:
-            # --- MODIFICATION 1: Metadata Display ---
+            # Metadata Display
             col_meta1, col_meta2 = st.columns([1, 1])
             with col_meta1:
                 st.metric("Geographic Area", meta["region"])
@@ -355,7 +383,7 @@ def show_scorecard_modal(ticker: str, benchmark_df: pd.DataFrame, params: dict):
             st.caption(f"**Description:** {meta['description']}")
             st.markdown("---")
 
-            # --- MODIFICATION 2: Candlestick Chart (Hollow/Solid Red & Green) ---
+            # Candlestick Chart (Hollow Green & Solid Red)
             st.write("### Weekly Candlestick Trend")
             fig = go.Figure(data=[
                 go.Candlestick(
@@ -364,10 +392,10 @@ def show_scorecard_modal(ticker: str, benchmark_df: pd.DataFrame, params: dict):
                     high=df['High'],
                     low=df['Low'],
                     close=df['Close'],
-                    increasing_line_color='#00B0FF',  # Green/Cyan for up weeks
-                    increasing_fillcolor='rgba(0,0,0,0)',  # Hollow
-                    decreasing_line_color='#FF5252',  # Red for down weeks
-                    decreasing_fillcolor='#FF5252'    # Solid
+                    increasing_line_color='#00E676',   # Green for up weeks
+                    increasing_fillcolor='rgba(0,0,0,0)', # Hollow green candle
+                    decreasing_line_color='#FF5252',   # Red for down weeks
+                    decreasing_fillcolor='#FF5252'     # Solid red candle
                 )
             ])
             fig.update_layout(
