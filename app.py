@@ -1,8 +1,9 @@
 """
 app.py
 ======
-Weekly ETF Rule Configurator & Scoring Engine (10 Rules)
+Weekly ETF Screener & Rule Engine (10 Rules)
 Optimized for Weekly Timeframe / Medium-to-Long Term Position Screening.
+Includes Asset Class, Country Exposure, and ETF Description metadata.
 """
 
 import os
@@ -91,13 +92,52 @@ if "config_df_v2" not in st.session_state:
 
 
 # ==============================================================================
-# DATA FETCHING & WEEKLY RESAMPLING
+# DATA FETCHING, METADATA & WEEKLY RESAMPLING
 # ==============================================================================
 
 @st.cache_data(ttl=1800, show_spinner=False)
-def fetch_weekly_etf_history(ticker: str) -> pd.DataFrame:
+def fetch_weekly_etf_history(ticker: str) -> tuple[pd.DataFrame, dict]:
+    """Fetches price history and metadata (Description, Category/Asset Type, Geography)."""
     ticker_clean = ticker.strip().upper()
+    meta = {
+        "name": ticker_clean,
+        "category": "N/A",
+        "geography": "N/A",
+        "description": "No description available."
+    }
+    
     try:
+        yf_obj = yf.Ticker(ticker_clean)
+        
+        # Extract Metadata
+        try:
+            info = yf_obj.info
+            if info:
+                meta["name"] = info.get("longName") or info.get("shortName") or ticker_clean
+                meta["category"] = info.get("category") or info.get("quoteType", "ETF").replace("_", " ").title()
+                meta["description"] = info.get("longBusinessSummary") or info.get("description") or "No detailed description available."
+                
+                # Derive geographic profile from category / summary text
+                cat_lower = meta["category"].lower()
+                desc_lower = meta["description"].lower()
+                
+                if "emerging" in cat_lower or "emerging" in desc_lower:
+                    if "ex-china" in desc_lower or "ex china" in desc_lower:
+                        meta["geography"] = "Emerging Markets (Ex-China)"
+                    else:
+                        meta["geography"] = "Emerging Markets"
+                elif "developed" in cat_lower or "foreign" in cat_lower or "international" in cat_lower or "ex-us" in desc_lower or "ex-u.s." in desc_lower:
+                    meta["geography"] = "International / Non-US"
+                elif "global" in cat_lower or "world" in cat_lower or "global" in desc_lower:
+                    meta["geography"] = "Global (US & Int'l)"
+                elif "treasury" in cat_lower or "us" in cat_lower or "u.s." in desc_lower or "america" in desc_lower:
+                    meta["geography"] = "United States"
+                else:
+                    meta["geography"] = "United States"
+        except Exception:
+            pass
+
+        # Fetch Historical Prices
         df = yf.download(
             ticker_clean,
             period="2y",
@@ -119,10 +159,10 @@ def fetch_weekly_etf_history(ticker: str) -> pd.DataFrame:
                 weekly_df["Close"] = df["Close"].resample("W-FRI").last()
                 weekly_df["Volume"] = df["Volume"].resample("W-FRI").sum() if "Volume" in df.columns else 0
                 
-                return weekly_df.dropna(subset=["Close"]).reset_index()
+                return weekly_df.dropna(subset=["Close"]).reset_index(), meta
     except Exception:
         pass
-    return pd.DataFrame()
+    return pd.DataFrame(), meta
 
 
 # ==============================================================================
@@ -346,11 +386,23 @@ def evaluate_weekly_rules(ticker: str, df: pd.DataFrame, benchmark_df: pd.DataFr
 
 @st.dialog("🔍 Weekly Scorecard Breakdown", width="large")
 def show_scorecard_modal(ticker: str, benchmark_df: pd.DataFrame, params: dict):
-    st.subheader(f"Weekly Scorecard: {ticker}")
-
     with st.spinner(f"Analyzing {ticker} on Weekly scale..."):
-        df = fetch_weekly_etf_history(ticker)
+        df, meta = fetch_weekly_etf_history(ticker)
         res = evaluate_weekly_rules(ticker, df, benchmark_df, params)
+
+    st.subheader(f"{meta['name']} ({ticker})")
+    
+    # Metadata Overview Panel
+    m_col1, m_col2 = st.columns(2)
+    with m_col1:
+        st.markdown(f"**Asset / Investment Type:** `{meta['category']}`")
+    with m_col2:
+        st.markdown(f"**Geographic Profile:** `{meta['geography']}`")
+        
+    with st.expander("📖 View Full ETF Description", expanded=False):
+        st.write(meta["description"])
+
+    st.markdown("---")
 
     if res is not None:
         action_label, action_type, action_desc = derive_action_signal(res["Score"])
@@ -408,7 +460,7 @@ def show_scorecard_modal(ticker: str, benchmark_df: pd.DataFrame, params: dict):
             st.metric("10. Money Flow Index", "✅ PASS" if res["Pass_Flow"] else "❌ FAIL", delta=f"{params['weight_flow'] if res['Pass_Flow'] else 0} / {params['weight_flow']} pts")
             st.info(res["Comm_Flow"])
     else:
-        st.error(f"Could not retrieve historical data for '{ticker}'.")
+        st.error(f"Could not retrieve historical price data for '{ticker}'.")
 
 
 # ==============================================================================
@@ -464,7 +516,7 @@ RULE_PARAMS = {
 
 st.title("🎯 Weekly ETF Screener & Analysis")
 
-benchmark_df = fetch_weekly_etf_history("SPY")
+benchmark_df, _ = fetch_weekly_etf_history("SPY")
 
 if not is_points_valid:
     st.error(f"⚠️ Points allocation total is currently {total_raw_points} pts. Please balance weights to 100 in the ⚙️ Sidebar Configurator.")
@@ -494,7 +546,7 @@ if should_run:
     progress_bar = st.progress(0)
     
     for idx, ticker in enumerate(active_tickers):
-        df = fetch_weekly_etf_history(ticker)
+        df, meta = fetch_weekly_etf_history(ticker)
         eval_res = evaluate_weekly_rules(ticker, df, benchmark_df, RULE_PARAMS)
         
         if eval_res is not None:
@@ -505,6 +557,9 @@ if should_run:
                 "Score": eval_res["Score"],
                 "Price_Raw": eval_res['Close'],
                 "Price": f"${eval_res['Close']:.2f}",
+                "Asset Type": meta["category"],
+                "Geography": meta["geography"],
+                "Description": meta["description"],
                 "Trend": "✅ Pass" if eval_res["Pass_MA"] else "❌ Fail",
                 "Return": "✅ Pass" if eval_res["Pass_Perf"] else "❌ Fail",
                 "OBV": "✅ Pass" if eval_res["Pass_OBV"] else "❌ Fail",
@@ -539,14 +594,17 @@ if "last_screener_df" in st.session_state and not st.session_state["last_screene
         screener_df.drop(columns=["Price_Raw"]),
         hide_index=True,
         column_order=[
-            "Ticker", "Action", "Score", "Price", 
+            "Ticker", "Action", "Score", "Price", "Asset Type", "Geography", "Description",
             "Trend", "Return", "OBV", "Rel Strength", "MACD", 
             "Drawdown", "52W High", "RSI Band", "Sharpe", "Flow"
         ],
         column_config={
             "Ticker": st.column_config.TextColumn("Ticker"),
             "Action": st.column_config.TextColumn("Signal", help="🟢 BUY (≥70), 🟡 HOLD (45-69), 🔴 SELL (<45)"),
-            "Score": st.column_config.NumberColumn("Score", format="%d pts")
+            "Score": st.column_config.NumberColumn("Score", format="%d pts"),
+            "Asset Type": st.column_config.TextColumn("Asset / Investment Type"),
+            "Geography": st.column_config.TextColumn("Geographic Profile"),
+            "Description": st.column_config.TextColumn("ETF Summary Description", width="medium"),
         },
         use_container_width=True,
         on_select="rerun",
