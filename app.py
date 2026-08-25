@@ -3,8 +3,8 @@ app.py
 ======
 Weekly ETF Screener & Rule Engine (10 Rules)
 Optimized for Weekly Timeframe / Medium-to-Long Term Position Screening.
-Includes metadata header cards inside the detailed modal window and 
-bulletproof URL query parameter state synchronization.
+Includes metadata header cards, interactive candlestick chart inside the detailed modal window,
+and bulletproof URL query parameter state synchronization.
 """
 
 import os
@@ -12,6 +12,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import yfinance as yf
+import plotly.graph_objects as go
 
 st.set_page_config(
     page_title="Weekly ETF Screener & Rule Engine",
@@ -419,6 +420,37 @@ def show_scorecard_modal(ticker: str, benchmark_df: pd.DataFrame, params: dict):
         
     with st.expander("📖 ETF Summary & Profile Description", expanded=False):
         st.write(meta["description"])
+
+    # Interactive Candlestick Chart in Expander (Below Summary, Above Scores)
+    with st.expander("📊 Weekly Candlestick Price Chart", expanded=False):
+        if not df.empty and all(col in df.columns for col in ["Date", "Open", "High", "Low", "Close"]):
+            fig = go.Figure(
+                data=[
+                    go.Candlestick(
+                        x=df["Date"],
+                        open=df["Open"],
+                        high=df["High"],
+                        low=df["Low"],
+                        close=df["Close"],
+                        increasing_line_color="#002b00",  # Dark Green border/wick for up candles
+                        increasing_fillcolor="#26a69a",   # Solid green fill for up candles
+                        decreasing_line_color="#ef5350",  # Red border/wick for down candles
+                        decreasing_fillcolor="#ef5350"   # Solid red fill for down candles
+                    )
+                ]
+            )
+            fig.update_layout(
+                title=f"{ticker} Weekly Price Movement (2-Year History)",
+                xaxis_title="Date",
+                yaxis_title="Price ($)",
+                xaxis_rangeslider_visible=False,
+                margin=dict(l=20, r=20, t=40, b=20),
+                height=450,
+                template="plotly_white"
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.warning("Insufficient historical price data to display candlestick chart.")
 
     st.markdown("---")
 
