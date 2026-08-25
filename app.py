@@ -3,7 +3,7 @@ app.py
 ======
 Weekly ETF Screener & Rule Engine (10 Rules)
 Optimized for Weekly Timeframe / Medium-to-Long Term Position Screening.
-Includes Asset Class, Country Exposure, and ETF Description metadata.
+Includes metadata header cards inside the detailed modal window.
 """
 
 import os
@@ -97,45 +97,63 @@ if "config_df_v2" not in st.session_state:
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_weekly_etf_history(ticker: str) -> tuple[pd.DataFrame, dict]:
-    """Fetches price history and metadata (Description, Category/Asset Type, Geography)."""
+    """
+    Fetches price history and metadata with multi-key fallbacks to resolve 'N/A' strings.
+    """
     ticker_clean = ticker.strip().upper()
     meta = {
         "name": ticker_clean,
         "category": "N/A",
         "geography": "N/A",
-        "description": "No description available."
+        "description": "No description available for this ticker."
     }
     
     try:
         yf_obj = yf.Ticker(ticker_clean)
         
-        # Extract Metadata
-        try:
-            info = yf_obj.info
-            if info:
-                meta["name"] = info.get("longName") or info.get("shortName") or ticker_clean
-                meta["category"] = info.get("category") or info.get("quoteType", "ETF").replace("_", " ").title()
-                meta["description"] = info.get("longBusinessSummary") or info.get("description") or "No detailed description available."
-                
-                # Derive geographic profile from category / summary text
-                cat_lower = meta["category"].lower()
-                desc_lower = meta["description"].lower()
-                
-                if "emerging" in cat_lower or "emerging" in desc_lower:
-                    if "ex-china" in desc_lower or "ex china" in desc_lower:
-                        meta["geography"] = "Emerging Markets (Ex-China)"
-                    else:
-                        meta["geography"] = "Emerging Markets"
-                elif "developed" in cat_lower or "foreign" in cat_lower or "international" in cat_lower or "ex-us" in desc_lower or "ex-u.s." in desc_lower:
-                    meta["geography"] = "International / Non-US"
-                elif "global" in cat_lower or "world" in cat_lower or "global" in desc_lower:
-                    meta["geography"] = "Global (US & Int'l)"
-                elif "treasury" in cat_lower or "us" in cat_lower or "u.s." in desc_lower or "america" in desc_lower:
-                    meta["geography"] = "United States"
+        # Robust metadata extraction supporting both Stock and ETF object formats
+        info = yf_obj.info or {}
+        if info:
+            meta["name"] = (
+                info.get("longName") 
+                or info.get("shortName") 
+                or ticker_clean
+            )
+            
+            # Category / Asset Class fallbacks
+            meta["category"] = (
+                info.get("category") 
+                or info.get("fundFamily")
+                or info.get("industry") 
+                or info.get("quoteType", "ETF").replace("_", " ").title()
+            )
+            
+            # Description fallbacks
+            meta["description"] = (
+                info.get("longBusinessSummary") 
+                or info.get("description") 
+                or info.get("summary") 
+                or "No detailed description available."
+            )
+            
+            # Geographic Region extraction
+            cat_lower = str(meta["category"]).lower()
+            desc_lower = str(meta["description"]).lower()
+            country_val = str(info.get("country", "")).lower()
+            
+            if "emerging" in cat_lower or "emerging" in desc_lower:
+                if "ex-china" in desc_lower or "ex china" in desc_lower:
+                    meta["geography"] = "Emerging Markets (Ex-China)"
                 else:
-                    meta["geography"] = "United States"
-        except Exception:
-            pass
+                    meta["geography"] = "Emerging Markets"
+            elif "developed" in cat_lower or "foreign" in cat_lower or "international" in cat_lower or "ex-us" in desc_lower or "ex-u.s." in desc_lower:
+                meta["geography"] = "International / Non-US"
+            elif "global" in cat_lower or "world" in cat_lower or "global" in desc_lower:
+                meta["geography"] = "Global (US & Int'l)"
+            elif country_val and country_val != "united states":
+                meta["geography"] = country_val.title()
+            else:
+                meta["geography"] = "United States"
 
         # Fetch Historical Prices
         df = yf.download(
@@ -384,26 +402,27 @@ def evaluate_weekly_rules(ticker: str, df: pd.DataFrame, benchmark_df: pd.DataFr
 # MODAL SCORECARD WINDOW (@st.dialog)
 # ==============================================================================
 
-@st.dialog("🔍 Weekly Scorecard Breakdown", width="large")
+@st.dialog("🔍 Detailed Scorecard Window", width="large")
 def show_scorecard_modal(ticker: str, benchmark_df: pd.DataFrame, params: dict):
-    with st.spinner(f"Analyzing {ticker} on Weekly scale..."):
+    with st.spinner(f"Fetching metadata and analyzing {ticker}..."):
         df, meta = fetch_weekly_etf_history(ticker)
         res = evaluate_weekly_rules(ticker, df, benchmark_df, params)
 
+    # 1. Header with Metadata Cards (Prevents Table Horizontal Overflow)
     st.subheader(f"{meta['name']} ({ticker})")
     
-    # Metadata Overview Panel
     m_col1, m_col2 = st.columns(2)
     with m_col1:
-        st.markdown(f"**Asset / Investment Type:** `{meta['category']}`")
+        st.info(f"**Asset / Investment Type:**\n\n`{meta['category']}`")
     with m_col2:
-        st.markdown(f"**Geographic Profile:** `{meta['geography']}`")
+        st.info(f"**Geographic Exposure:**\n\n`{meta['geography']}`")
         
-    with st.expander("📖 View Full ETF Description", expanded=False):
+    with st.expander("📖 ETF Summary & Profile Description", expanded=False):
         st.write(meta["description"])
 
     st.markdown("---")
 
+    # 2. Performance & Signal Metrics
     if res is not None:
         action_label, action_type, action_desc = derive_action_signal(res["Score"])
 
@@ -419,6 +438,8 @@ def show_scorecard_modal(ticker: str, benchmark_df: pd.DataFrame, params: dict):
                 st.error(f"### Signal: {action_label}\n{action_desc}")
 
         st.markdown("---")
+        
+        # 3. 10 Technical Rule Breakdown Cards
         c1, c2, c3 = st.columns(3)
         with c1:
             st.metric("1. Weekly Trend", "✅ PASS" if res["Pass_MA"] else "❌ FAIL", delta=f"{params['weight_ma'] if res['Pass_MA'] else 0} / {params['weight_ma']} pts")
@@ -521,7 +542,6 @@ benchmark_df, _ = fetch_weekly_etf_history("SPY")
 if not is_points_valid:
     st.error(f"⚠️ Points allocation total is currently {total_raw_points} pts. Please balance weights to 100 in the ⚙️ Sidebar Configurator.")
 
-# Text area automatically triggers sync_and_uppercase_params on edit
 tickers_input = st.text_area(
     "Tickers to Score:",
     height=120,
@@ -557,9 +577,6 @@ if should_run:
                 "Score": eval_res["Score"],
                 "Price_Raw": eval_res['Close'],
                 "Price": f"${eval_res['Close']:.2f}",
-                "Asset Type": meta["category"],
-                "Geography": meta["geography"],
-                "Description": meta["description"],
                 "Trend": "✅ Pass" if eval_res["Pass_MA"] else "❌ Fail",
                 "Return": "✅ Pass" if eval_res["Pass_Perf"] else "❌ Fail",
                 "OBV": "✅ Pass" if eval_res["Pass_OBV"] else "❌ Fail",
@@ -590,11 +607,12 @@ if "last_screener_df" in st.session_state and not st.session_state["last_screene
 
     screener_df = st.session_state["last_screener_df"]
     
+    # Clean table layout without wide text fields to eliminate horizontal scroll issues
     event = st.dataframe(
         screener_df.drop(columns=["Price_Raw"]),
         hide_index=True,
         column_order=[
-            "Ticker", "Action", "Score", "Price", "Asset Type", "Geography", "Description",
+            "Ticker", "Action", "Score", "Price", 
             "Trend", "Return", "OBV", "Rel Strength", "MACD", 
             "Drawdown", "52W High", "RSI Band", "Sharpe", "Flow"
         ],
@@ -602,9 +620,7 @@ if "last_screener_df" in st.session_state and not st.session_state["last_screene
             "Ticker": st.column_config.TextColumn("Ticker"),
             "Action": st.column_config.TextColumn("Signal", help="🟢 BUY (≥70), 🟡 HOLD (45-69), 🔴 SELL (<45)"),
             "Score": st.column_config.NumberColumn("Score", format="%d pts"),
-            "Asset Type": st.column_config.TextColumn("Asset / Investment Type"),
-            "Geography": st.column_config.TextColumn("Geographic Profile"),
-            "Description": st.column_config.TextColumn("ETF Summary Description", width="medium"),
+            "Price": st.column_config.TextColumn("Price")
         },
         use_container_width=True,
         on_select="rerun",
