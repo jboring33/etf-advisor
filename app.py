@@ -159,21 +159,31 @@ def evaluate_weekly_rules(ticker: str, df: pd.DataFrame, benchmark_df: pd.DataFr
     close = pd.Series(df["Close"].values.flatten())
     volume = pd.Series(df["Volume"].values.flatten()) if "Volume" in df.columns else pd.Series(np.zeros(len(df)))
 
-    # 1. Weekly Trend
+    # 1. Weekly Trend (10/30 EMA)
     ema_fast = close.ewm(span=params["ema_fast_w"], adjust=False).mean()
     ema_slow = close.ewm(span=params["ema_slow_w"], adjust=False).mean()
     latest_close = float(close.iloc[-1])
     fast_val = float(ema_fast.iloc[-1])
     slow_val = float(ema_slow.iloc[-1])
     rule_ma_passed = fast_val > slow_val
-    comm_ma = f"**Data:** 10 Wk EMA (${fast_val:.2f}) vs 30 Wk EMA (${slow_val:.2f})\n\n**Expected Range:** 10 Wk EMA > 30 Wk EMA."
+    comm_ma = (
+        f"**What:** Short-term weekly moving average (10-EMA) vs structural weekly baseline (30-EMA).\n\n"
+        f"**Why:** Ensures the ETF is in a sustained primary uptrend and avoids catching falling knives.\n\n"
+        f"**Data:** 10-Wk EMA (${fast_val:.2f}) vs 30-Wk EMA (${slow_val:.2f})\n\n"
+        f"**Expected:** 10-Wk EMA > 30-Wk EMA."
+    )
 
-    # 2. Absolute Return
+    # 2. 12-Week Absolute Return
     lookback_weeks = min(params["perf_weeks"], len(close) - 1)
     past_close = float(close.iloc[-lookback_weeks])
     period_return_pct = ((latest_close - past_close) / past_close) * 100
     rule_perf_passed = period_return_pct >= params["min_return_pct"]
-    comm_perf = f"**Data:** {lookback_weeks}-Week Return: {period_return_pct:+.2f}%\n\n**Expected Range:** Target ≥ +{params['min_return_pct']}%."
+    comm_perf = (
+        f"**What:** 3-month trailing absolute percentage change.\n\n"
+        f"**Why:** Confirms underlying price expansion and positive quarterly performance momentum.\n\n"
+        f"**Data:** {lookback_weeks}-Week Return: {period_return_pct:+.2f}%\n\n"
+        f"**Expected:** Return ≥ +{params['min_return_pct']}%."
+    )
 
     # 3. Weekly OBV Trend
     price_diff = close.diff()
@@ -183,16 +193,25 @@ def evaluate_weekly_rules(ticker: str, df: pd.DataFrame, benchmark_df: pd.DataFr
     latest_obv = float(obv.iloc[-1]) if not obv.empty else 0.0
     latest_obv_sma = float(obv_sma20.iloc[-1]) if not obv_sma20.empty else 0.0
     rule_obv_passed = latest_obv > latest_obv_sma
-    comm_obv = f"**Data:** OBV: {latest_obv:,.0f} vs 20 Wk OBV SMA: {latest_obv_sma:,.0f}\n\n**Expected Range:** Weekly OBV > 20 Wk OBV SMA."
+    comm_obv = (
+        f"**What:** Cumulative On-Balance Volume relative to its 20-week simple moving average.\n\n"
+        f"**Why:** Verifies volume is expanding on up weeks, signalling genuine institutional accumulation.\n\n"
+        f"**Data:** OBV ({latest_obv:,.0f}) vs 20-Wk SMA ({latest_obv_sma:,.0f})\n\n"
+        f"**Expected:** Weekly OBV > 20-Wk OBV SMA."
+    )
 
-    # 4. Relative Strength vs SPY
+    # 4. 12-Week Relative Strength vs SPY
     alpha_pct = 0.0
     rule_rs_passed = False
     rs_display = "❌ Fail"
     
     if ticker_upper == "SPY":
         rs_display = "N/A"
-        comm_rs = f"**Data:** N/A (Benchmark Baseline)"
+        comm_rs = (
+            f"**What:** Outperformance (Alpha) compared to SPY over 12 weeks.\n\n"
+            f"**Why:** Evaluated ticker is SPY (benchmark baseline).\n\n"
+            f"**Data:** N/A (Benchmark Baseline)"
+        )
     else:
         if not benchmark_df.empty and len(benchmark_df) >= lookback_weeks:
             bench_close = pd.Series(benchmark_df["Close"].values.flatten())
@@ -202,9 +221,14 @@ def evaluate_weekly_rules(ticker: str, df: pd.DataFrame, benchmark_df: pd.DataFr
             alpha_pct = period_return_pct - bench_return
             rule_rs_passed = alpha_pct >= params["min_alpha_pct"]
             rs_display = "✅ Pass" if rule_rs_passed else "❌ Fail"
-        comm_rs = f"**Data:** 12-Week Alpha vs SPY: {alpha_pct:+.2f}%\n\n**Expected Range:** ≥ +1.0% Alpha."
+        comm_rs = (
+            f"**What:** Excess return (Alpha) generated over the S&P 500 (SPY) over 12 weeks.\n\n"
+            f"**Why:** Filters for true market leaders that outperform the broad index.\n\n"
+            f"**Data:** 12-Week Alpha vs SPY: {alpha_pct:+.2f}%\n\n"
+            f"**Expected:** Alpha ≥ +{params['min_alpha_pct']}%."
+        )
 
-    # 5. Weekly MACD
+    # 5. Weekly MACD Alignment
     ema12 = close.ewm(span=12, adjust=False).mean()
     ema26 = close.ewm(span=26, adjust=False).mean()
     macd_line = ema12 - ema26
@@ -212,9 +236,14 @@ def evaluate_weekly_rules(ticker: str, df: pd.DataFrame, benchmark_df: pd.DataFr
     latest_macd = float(macd_line.iloc[-1])
     latest_signal = float(signal_line.iloc[-1])
     rule_macd_passed = latest_macd > latest_signal
-    comm_macd = f"**Data:** MACD Line: {latest_macd:.2f} vs Signal Line: {latest_signal:.2f}\n\n**Expected Range:** MACD > Signal."
+    comm_macd = (
+        f"**What:** Relationship between the weekly MACD Line (12/26 EMA) and its 9-period Signal Line.\n\n"
+        f"**Why:** Identifies macro cycle momentum expansion and confirms bullish multi-week direction.\n\n"
+        f"**Data:** MACD ({latest_macd:.2f}) vs Signal Line ({latest_signal:.2f})\n\n"
+        f"**Expected:** MACD Line > Signal Line."
+    )
 
-    # 6. Max Drawdown
+    # 6. 26-Week Max Drawdown
     max_dd_pct = 0.0
     rule_dd_passed = False
     if len(close) >= 26:
@@ -223,7 +252,12 @@ def evaluate_weekly_rules(ticker: str, df: pd.DataFrame, benchmark_df: pd.DataFr
         drawdown = (tail_26 - rolling_max) / rolling_max
         max_dd_pct = abs(float(drawdown.min())) * 100
         rule_dd_passed = max_dd_pct <= params["max_drawdown_pct"]
-    comm_dd = f"**Data:** 26-Week Max Drawdown: {max_dd_pct:.2f}%\n\n**Expected Range:** ≤ 12.0%."
+    comm_dd = (
+        f"**What:** Maximum peak-to-trough decline over the past 6 months (26 weeks).\n\n"
+        f"**Why:** Filters out highly volatile, prone-to-crash assets to protect capital.\n\n"
+        f"**Data:** 26-Week Max Drawdown: {max_dd_pct:.2f}%\n\n"
+        f"**Expected:** Drawdown ≤ {params['max_drawdown_pct']}%."
+    )
 
     # 7. 52-Week High Proximity
     dist_52w_high_pct = 0.0
@@ -232,12 +266,22 @@ def evaluate_weekly_rules(ticker: str, df: pd.DataFrame, benchmark_df: pd.DataFr
         high_52w = float(close.tail(52).max())
         dist_52w_high_pct = ((high_52w - latest_close) / high_52w) * 100
         rule_52w_passed = dist_52w_high_pct <= params["max_dist_52w_pct"]
-    comm_52w = f"**Data:** Distance from 52W High: {dist_52w_high_pct:.2f}%\n\n**Expected Range:** ≤ 10.0%."
+    comm_52w = (
+        f"**What:** Percentage distance from current price to the 52-week high.\n\n"
+        f"**Why:** Leading assets trade near high ground; avoids structural laggards stuck in deep overhead supply.\n\n"
+        f"**Data:** Distance from 52-Wk High: {dist_52w_high_pct:.2f}%\n\n"
+        f"**Expected:** Distance ≤ {params['max_dist_52w_pct']}%."
+    )
 
     # 8. Weekly RSI Band Filter
     rsi_val = calculate_weekly_rsi(close, period=14)
     rule_rsi_passed = (rsi_val >= params["min_rsi"]) and (rsi_val <= params["max_rsi"])
-    comm_rsi = f"**Data:** 14-Week RSI: {rsi_val:.1f}\n\n**Expected Range:** 48 to 68."
+    comm_rsi = (
+        f"**What:** 14-week Relative Strength Index value.\n\n"
+        f"**Why:** Ensures active momentum (>48) while avoiding severely overbought exhaustion zones (>68).\n\n"
+        f"**Data:** 14-Week RSI: {rsi_val:.1f}\n\n"
+        f"**Expected:** RSI between {params['min_rsi']} and {params['max_rsi']}."
+    )
 
     # 9. 52-Week Sharpe Ratio
     weekly_returns = close.pct_change().dropna()
@@ -245,7 +289,12 @@ def evaluate_weekly_rules(ticker: str, df: pd.DataFrame, benchmark_df: pd.DataFr
     ann_std = weekly_returns.std() * np.sqrt(52)
     sharpe_ratio = (ann_return / ann_std) if ann_std > 0 else 0.0
     rule_sharpe_passed = sharpe_ratio >= params["min_sharpe"]
-    comm_sharpe = f"**Data:** Annualized Sharpe Ratio: {sharpe_ratio:.2f}\n\n**Expected Range:** ≥ 0.50."
+    comm_sharpe = (
+        f"**What:** Annualized risk-adjusted return ratio over the past 52 weeks.\n\n"
+        f"**Why:** Validates that returns are generated efficiently relative to price volatility.\n\n"
+        f"**Data:** Annualized Sharpe Ratio: {sharpe_ratio:.2f}\n\n"
+        f"**Expected:** Sharpe Ratio ≥ {params['min_sharpe']:.2f}."
+    )
 
     # 10. 12-Week Money Flow Index
     hist_vol = volume.tail(12)
@@ -256,7 +305,12 @@ def evaluate_weekly_rules(ticker: str, df: pd.DataFrame, benchmark_df: pd.DataFr
     avg_vol = hist_vol.mean()
     flow_score = 50 if avg_vol == 0 else int(min(100, max(0, 50 + (net_vol / (avg_vol * 6)) * 50)))
     rule_flow_passed = flow_score >= params["min_flow_score"]
-    comm_flow = f"**Data:** 12-Week Flow Index: {flow_score}/100\n\n**Expected Range:** 50-100."
+    comm_flow = (
+        f"**What:** Volume-weighted price direction score over the trailing 12 weeks.\n\n"
+        f"**Why:** Measures net capital inflows vs outflows to confirm institutional backing.\n\n"
+        f"**Data:** 12-Week Flow Index: {flow_score}/100\n\n"
+        f"**Expected:** Flow Index ≥ {params['min_flow_score']:.0f}."
+    )
 
     total_score = 0
     if rule_ma_passed: total_score += params["weight_ma"]
