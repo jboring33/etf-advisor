@@ -64,16 +64,16 @@ def sync_and_uppercase_params():
 
 if "config_df_v2" not in st.session_state:
     st.session_state["config_df_v2"] = pd.DataFrame([
-        {"Rule #": "Rule 1", "Rule Name": "Weekly Trend (10/30 EMA)", "My Weight": 15},
-        {"Rule #": "Rule 2", "Rule Name": "12-Week Absolute Return", "My Weight": 10},
-        {"Rule #": "Rule 3", "Rule Name": "Weekly OBV Trend", "My Weight": 10},
-        {"Rule #": "Rule 4", "Rule Name": "12-Week Relative Strength", "My Weight": 15},
-        {"Rule #": "Rule 5", "Rule Name": "MACD Histogram Expansion", "My Weight": 10},
-        {"Rule #": "Rule 6", "Rule Name": "26-Week Max Drawdown", "My Weight": 12},
-        {"Rule #": "Rule 7", "Rule Name": "52-Week High Proximity", "My Weight": 8},
-        {"Rule #": "Rule 8", "Rule Name": "Weekly RSI Band Filter (48-62)", "My Weight": 5},
-        {"Rule #": "Rule 9", "Rule Name": "1-Week Direction Trigger", "My Weight": 10},
-        {"Rule #": "Rule 10", "Rule Name": "12-Week Money Flow Index", "My Weight": 5},
+        {"Rule #": "Rule 1", "Rule Name": "Weekly Trend (10/30 EMA)", "Parameters": "10-EMA > 30-EMA", "My Weight": 15},
+        {"Rule #": "Rule 2", "Rule Name": "12-Week Absolute Return", "Parameters": "12W Return ≥ +2.0%", "My Weight": 10},
+        {"Rule #": "Rule 3", "Rule Name": "Weekly OBV Trend", "Parameters": "OBV > 20-Wk OBV SMA", "My Weight": 10},
+        {"Rule #": "Rule 4", "Rule Name": "12-Week Relative Strength", "Parameters": "12W Alpha vs SPY ≥ +1.0%", "My Weight": 15},
+        {"Rule #": "Rule 5", "Rule Name": "MACD Histogram Expansion", "Parameters": "Hist > 0 & Hist_t ≥ Hist_t-1", "My Weight": 10},
+        {"Rule #": "Rule 6", "Rule Name": "26-Week Max Drawdown", "Parameters": "26W Drawdown ≤ 12.0%", "My Weight": 12},
+        {"Rule #": "Rule 7", "Rule Name": "52-Week High Proximity", "Parameters": "Dist from 52W High ≤ 10.0%", "My Weight": 8},
+        {"Rule #": "Rule 8", "Rule Name": "Weekly RSI Band Filter", "Parameters": "RSI between 48.0 & 62.0", "My Weight": 5},
+        {"Rule #": "Rule 9", "Rule Name": "1-Week Direction Trigger", "Parameters": "1-Week Return ≥ 0.0%", "My Weight": 10},
+        {"Rule #": "Rule 10", "Rule Name": "12-Week Money Flow Index", "Parameters": "Flow Score ≥ 50 / 100", "My Weight": 5},
     ])
 
 #
@@ -496,6 +496,7 @@ with st.sidebar:
         column_config={
             "Rule #": st.column_config.TextColumn("Rule #", disabled=True),
             "Rule Name": st.column_config.TextColumn("Rule Name", disabled=True),
+            "Parameters": st.column_config.TextColumn("Threshold Parameters", disabled=True),
             "My Weight": st.column_config.NumberColumn("My Weight", min_value=0, max_value=100, step=1, format="%d")
         },
         key="rule_weights_editor_sidebar"
