@@ -64,16 +64,16 @@ def sync_and_uppercase_params():
 
 if "config_df_v2" not in st.session_state:
     st.session_state["config_df_v2"] = pd.DataFrame([
-        {"Rule #": "Rule 1", "Rule Name": "Weekly Trend (10/30 EMA)", "Parameters": "10-EMA > 30-EMA", "My Weight": 15},
-        {"Rule #": "Rule 2", "Rule Name": "12-Week Absolute Return", "Parameters": "12W Return ≥ +2.0%", "My Weight": 10},
-        {"Rule #": "Rule 3", "Rule Name": "Weekly OBV Trend", "Parameters": "OBV > 20-Wk OBV SMA", "My Weight": 10},
-        {"Rule #": "Rule 4", "Rule Name": "12-Week Relative Strength", "Parameters": "12W Alpha vs SPY ≥ +1.0%", "My Weight": 15},
-        {"Rule #": "Rule 5", "Rule Name": "MACD Histogram Expansion", "Parameters": "Hist > 0 & Hist_t ≥ Hist_t-1", "My Weight": 10},
-        {"Rule #": "Rule 6", "Rule Name": "26-Week Max Drawdown", "Parameters": "26W Drawdown ≤ 12.0%", "My Weight": 12},
-        {"Rule #": "Rule 7", "Rule Name": "52-Week High Proximity", "Parameters": "Dist from 52W High ≤ 10.0%", "My Weight": 8},
-        {"Rule #": "Rule 8", "Rule Name": "Weekly RSI Band Filter", "Parameters": "RSI between 48.0 & 62.0", "My Weight": 5},
-        {"Rule #": "Rule 9", "Rule Name": "1-Week Direction Trigger", "Parameters": "1-Week Return ≥ 0.0%", "My Weight": 10},
-        {"Rule #": "Rule 10", "Rule Name": "12-Week Money Flow Index", "Parameters": "Flow Score ≥ 50 / 100", "My Weight": 5},
+        {"Rule #": "Rule 1", "Rule Name": "Weekly Trend (10/30 EMA)", "Parameters": "10-Wk EMA vs 30-Wk EMA", "My Weight": 15},
+        {"Rule #": "Rule 2", "Rule Name": "12-Week Absolute Return", "Parameters": "12 Wks | Min +2.0%", "My Weight": 10},
+        {"Rule #": "Rule 3", "Rule Name": "Weekly OBV Trend", "Parameters": "OBV vs 20-Wk SMA", "My Weight": 10},
+        {"Rule #": "Rule 4", "Rule Name": "12-Week Relative Strength", "Parameters": "12 Wks | Min +1.0% vs SPY", "My Weight": 15},
+        {"Rule #": "Rule 5", "Rule Name": "MACD Histogram Expansion", "Parameters": "12, 26, 9 MACD | Positive & Rising", "My Weight": 10},
+        {"Rule #": "Rule 6", "Rule Name": "26-Week Max Drawdown", "Parameters": "26 Wks | Max Drawdown ≤ 12.0%", "My Weight": 12},
+        {"Rule #": "Rule 7", "Rule Name": "52-Week High Proximity", "Parameters": "52 Wks | Distance ≤ 10.0%", "My Weight": 8},
+        {"Rule #": "Rule 8", "Rule Name": "Weekly RSI Band Filter", "Parameters": "14-Wk RSI | 48.0 to 62.0", "My Weight": 5},
+        {"Rule #": "Rule 9", "Rule Name": "1-Week Direction Trigger", "Parameters": "1 Wk | Min Return ≥ 0.0%", "My Weight": 10},
+        {"Rule #": "Rule 10", "Rule Name": "12-Week Money Flow Index", "Parameters": "12 Wks | Min Score ≥ 50.0", "My Weight": 5},
     ])
 
 #
@@ -193,10 +193,10 @@ def evaluate_weekly_rules(ticker: str, df: pd.DataFrame, benchmark_df: pd.DataFr
     slow_val = float(ema_slow.iloc[-1])
     rule_ma_passed = fast_val > slow_val
     comm_ma = (
-        f"**What:** Short-term weekly moving average (10-EMA) vs structural weekly baseline (30-EMA).\n\n"
+        f"**What:** Short-term weekly moving average ({params['ema_fast_w']}-EMA) vs structural weekly baseline ({params['ema_slow_w']}-EMA).\n\n"
         f"**Why:** Ensures the ETF is in a sustained primary uptrend and avoids catching falling knives.\n\n"
-        f"**Data:** 10-Wk EMA (${fast_val:.2f}) vs 30-Wk EMA (${slow_val:.2f})\n\n"
-        f"**Expected:** 10-WK EMA > 30-WK EMA."
+        f"**Data:** {params['ema_fast_w']}-Wk EMA (${fast_val:.2f}) vs {params['ema_slow_w']}-Wk EMA (${slow_val:.2f})\n\n"
+        f"**Expected:** {params['ema_fast_w']}-WK EMA > {params['ema_slow_w']}-WK EMA."
     )
 
     # 2. 12-Week Absolute Return
@@ -233,7 +233,7 @@ def evaluate_weekly_rules(ticker: str, df: pd.DataFrame, benchmark_df: pd.DataFr
     if ticker_upper == "SPY":
         rs_display = "N/A"
         comm_rs = (
-            f"**What:** Outperformance (Alpha) compared to SPY over 12 weeks.\n\n"
+            f"**What:** Outperformance (Alpha) compared to SPY over {lookback_weeks} weeks.\n\n"
             f"**Why:** Evaluated ticker is SPY (benchmark baseline).\n\n"
             f"**Data:** N/A (Benchmark Baseline)"
         )
@@ -247,17 +247,17 @@ def evaluate_weekly_rules(ticker: str, df: pd.DataFrame, benchmark_df: pd.DataFr
             rule_rs_passed = alpha_pct >= params["min_alpha_pct"]
             rs_display = " PASS" if rule_rs_passed else "X Fail"
             comm_rs = (
-                f"**What:** Excess return (Alpha) generated over the S&P 500 (SPY) over 12 weeks.\n\n"
+                f"**What:** Excess return (Alpha) generated over the S&P 500 (SPY) over {lookback_weeks} weeks.\n\n"
                 f"**Why:** Filters for true market leaders that outperform the broad index.\n\n"
-                f"**Data:** 12-Week Alpha vs SPY: {alpha_pct:+.2f}%\n\n"
+                f"**Data:** {lookback_weeks}-Week Alpha vs SPY: {alpha_pct:+.2f}%\n\n"
                 f"**Expected:** Alpha ≥ +{params['min_alpha_pct']}%."
             )
 
     # 5. MACD Histogram Expansion (Dynamic Check)
-    ema12 = close.ewm(span=12, adjust=False).mean()
-    ema26 = close.ewm(span=26, adjust=False).mean()
+    ema12 = close.ewm(span=params["macd_fast"], adjust=False).mean()
+    ema26 = close.ewm(span=params["macd_slow"], adjust=False).mean()
     macd_line = ema12 - ema26
-    signal_line = macd_line.ewm(span=9, adjust=False).mean()
+    signal_line = macd_line.ewm(span=params["macd_signal"], adjust=False).mean()
     histogram = macd_line - signal_line
     
     latest_hist = float(histogram.iloc[-1])
@@ -266,7 +266,7 @@ def evaluate_weekly_rules(ticker: str, df: pd.DataFrame, benchmark_df: pd.DataFr
     
     hist_direction = "Expanding" if latest_hist >= prev_hist else "Contracting"
     comm_macd = (
-        f"**What:** Direct check of MACD Histogram value and expansion slope.\n\n"
+        f"**What:** Direct check of MACD Histogram ({params['macd_fast']},{params['macd_slow']},{params['macd_signal']}) value and expansion slope.\n\n"
         f"**Why:** Detects fading velocity and momentum deceleration weeks before a major trend reversal.\n\n"
         f"**Data:** Current Hist: {latest_hist:+.3f} | Prev Hist: {prev_hist:+.3f} ({hist_direction})\n\n"
         f"**Expected:** Histogram > 0 AND Current Hist ≥ Prev Hist."
@@ -307,7 +307,7 @@ def evaluate_weekly_rules(ticker: str, df: pd.DataFrame, benchmark_df: pd.DataFr
     rule_rsi_passed = (rsi_val >= params["min_rsi"]) and (rsi_val <= params["max_rsi"])
     comm_rsi = (
         f"**What:** 14-week Relative Strength Index value.\n\n"
-        f"**Why:** Prevents buying peak overextended levels (cap lowered to 62.0 to avoid local tops).\n\n"
+        f"**Why:** Prevents buying peak overextended levels (cap lowered to {params['max_rsi']} to avoid local tops).\n\n"
         f"**Data:** 14-Week RSI: {rsi_val:.1f}\n\n"
         f"**Expected:** RSI between {params['min_rsi']} and {params['max_rsi']}."
     )
@@ -520,7 +520,7 @@ with st.sidebar:
         "perf_weeks": 12, "min_return_pct": 2.0, "weight_perf": int(weights[1]),
         "weight_obv": int(weights[2]),
         "min_alpha_pct": 1.0, "weight_rs": int(weights[3]),
-        "weight_macd": int(weights[4]),
+        "macd_fast": 12, "macd_slow": 26, "macd_signal": 9, "weight_macd": int(weights[4]),
         "max_drawdown_pct": 12.0, "weight_dd": int(weights[5]),
         "max_dist_52w_pct": 10.0, "weight_52w": int(weights[6]),
         "min_rsi": 48.0, "max_rsi": 62.0, "weight_rsi": int(weights[7]),
