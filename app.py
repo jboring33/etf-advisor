@@ -68,11 +68,11 @@ if "config_df_v2" not in st.session_state:
         {"Rule #": "Rule 2", "Rule Name": "12-Week Absolute Return", "My Weight": 10},
         {"Rule #": "Rule 3", "Rule Name": "Weekly OBV Trend", "My Weight": 10},
         {"Rule #": "Rule 4", "Rule Name": "12-Week Relative Strength", "My Weight": 15},
-        {"Rule #": "Rule 5", "Rule Name": "Weekly MACD Alignment", "My Weight": 10},
+        {"Rule #": "Rule 5", "Rule Name": "MACD Histogram Expansion", "My Weight": 10},
         {"Rule #": "Rule 6", "Rule Name": "26-Week Max Drawdown", "My Weight": 12},
         {"Rule #": "Rule 7", "Rule Name": "52-Week High Proximity", "My Weight": 8},
-        {"Rule #": "Rule 8", "Rule Name": "Weekly RSI Band Filter", "My Weight": 5},
-        {"Rule #": "Rule 9", "Rule Name": "52-Week Sharpe Ratio", "My Weight": 10},
+        {"Rule #": "Rule 8", "Rule Name": "Weekly RSI Band Filter (48-62)", "My Weight": 5},
+        {"Rule #": "Rule 9", "Rule Name": "1-Week Direction Trigger", "My Weight": 10},
         {"Rule #": "Rule 10", "Rule Name": "12-Week Money Flow Index", "My Weight": 5},
     ])
 
@@ -173,7 +173,7 @@ def derive_action_signal(score: int) -> tuple[str, str, str]:
         return "SELL", "error", "Weekly technical indicators indicate structural trend decay or drawdown."
 
 #
-# === WEEKLY RULE ENGINE ===
+# === WEEKLY RULE ENGINE (REFINED TIMING & MOMENTUM) ===
 #
 def evaluate_weekly_rules(ticker: str, df: pd.DataFrame, benchmark_df: pd.DataFrame, params: dict):
     if df.empty or len(df) < 35:
@@ -183,10 +183,12 @@ def evaluate_weekly_rules(ticker: str, df: pd.DataFrame, benchmark_df: pd.DataFr
     close = pd.Series(df["Close"].values.flatten())
     volume = pd.Series(df["Volume"].values.flatten()) if "Volume" in df.columns else pd.Series(np.zeros(len(df)))
 
+    latest_close = float(close.iloc[-1])
+    prev_close = float(close.iloc[-2])
+
     # 1. Weekly Trend (10/30 EMA)
     ema_fast = close.ewm(span=params["ema_fast_w"], adjust=False).mean()
     ema_slow = close.ewm(span=params["ema_slow_w"], adjust=False).mean()
-    latest_close = float(close.iloc[-1])
     fast_val = float(ema_fast.iloc[-1])
     slow_val = float(ema_slow.iloc[-1])
     rule_ma_passed = fast_val > slow_val
@@ -251,19 +253,23 @@ def evaluate_weekly_rules(ticker: str, df: pd.DataFrame, benchmark_df: pd.DataFr
                 f"**Expected:** Alpha ≥ +{params['min_alpha_pct']}%."
             )
 
-    # 5. Weekly MACD Alignment
+    # 5. MACD Histogram Expansion (Dynamic Check)
     ema12 = close.ewm(span=12, adjust=False).mean()
     ema26 = close.ewm(span=26, adjust=False).mean()
     macd_line = ema12 - ema26
     signal_line = macd_line.ewm(span=9, adjust=False).mean()
-    latest_macd = float(macd_line.iloc[-1])
-    latest_signal = float(signal_line.iloc[-1])
-    rule_macd_passed = latest_macd > latest_signal
+    histogram = macd_line - signal_line
+    
+    latest_hist = float(histogram.iloc[-1])
+    prev_hist = float(histogram.iloc[-2])
+    rule_macd_passed = (latest_hist > 0) and (latest_hist >= prev_hist)
+    
+    hist_direction = "Expanding" if latest_hist >= prev_hist else "Contracting"
     comm_macd = (
-        f"**What:** Relationship between the weekly MACD Line (12/26 EMA) and its 9-period Signal Line.\n\n"
-        f"**Why:** Identifies macro cycle momentum expansion and confirms bullish multi-week direction.\n\n"
-        f"**Data:** MACD ({latest_macd:.2f}) vs Signal Line ({latest_signal:.2f})\n\n"
-        f"**Expected:** MACD Line > Signal Line."
+        f"**What:** Direct check of MACD Histogram value and expansion slope.\n\n"
+        f"**Why:** Detects fading velocity and momentum deceleration weeks before a major trend reversal.\n\n"
+        f"**Data:** Current Hist: {latest_hist:+.3f} | Prev Hist: {prev_hist:+.3f} ({hist_direction})\n\n"
+        f"**Expected:** Histogram > 0 AND Current Hist ≥ Prev Hist."
     )
 
     # 6. 26-Week Max Drawdown
@@ -296,27 +302,24 @@ def evaluate_weekly_rules(ticker: str, df: pd.DataFrame, benchmark_df: pd.DataFr
             f"**Expected:** Distance < {params['max_dist_52w_pct']}%."
         )
 
-    # 8. Weekly RSI Band Filter
+    # 8. Weekly RSI Band Filter (Tightened Upper Ceiling to 62)
     rsi_val = calculate_weekly_rsi(close, period=14)
     rule_rsi_passed = (rsi_val >= params["min_rsi"]) and (rsi_val <= params["max_rsi"])
     comm_rsi = (
         f"**What:** 14-week Relative Strength Index value.\n\n"
-        f"**Why:** Ensures active momentum (>48) while avoiding severely overbought exhaustion zones (>68).\n\n"
+        f"**Why:** Prevents buying peak overextended levels (cap lowered to 62.0 to avoid local tops).\n\n"
         f"**Data:** 14-Week RSI: {rsi_val:.1f}\n\n"
         f"**Expected:** RSI between {params['min_rsi']} and {params['max_rsi']}."
     )
 
-    # 9. 52-Week Sharpe Ratio
-    weekly_returns = close.pct_change().dropna()
-    ann_return = weekly_returns.mean() * 52
-    ann_std = weekly_returns.std() * np.sqrt(52)
-    sharpe_ratio = (ann_return / ann_std) if ann_std > 0 else 0.0
-    rule_sharpe_passed = sharpe_ratio >= params["min_sharpe"]
-    comm_sharpe = (
-        f"**What:** Annualized risk-adjusted return ratio over the past 52 weeks.\n\n"
-        f"**Why:** Validates that returns are generated efficiently relative to price volatility.\n\n"
-        f"**Data:** Annualized Sharpe Ratio: {sharpe_ratio:.2f}\n\n"
-        f"**Expected:** Sharpe Ratio ≥ {params['min_sharpe']:.2f}."
+    # 9. 1-Week Pullback Guardrail (Direction Check)
+    return_1w_pct = ((latest_close - prev_close) / prev_close) * 100
+    rule_1w_passed = return_1w_pct >= 0.0
+    comm_1w = (
+        f"**What:** Price performance of the current week relative to last week's close.\n\n"
+        f"**Why:** Ensures entries are synchronized with active upward weekly price action, avoiding buying into dips.\n\n"
+        f"**Data:** 1-Week Return: {return_1w_pct:+.2f}%\n\n"
+        f"**Expected:** 1-Week Return ≥ 0.0%."
     )
 
     # 10. 12-Week Money Flow Index
@@ -344,7 +347,7 @@ def evaluate_weekly_rules(ticker: str, df: pd.DataFrame, benchmark_df: pd.DataFr
     if rule_dd_passed: total_score += params["weight_dd"]
     if rule_52w_passed: total_score += params["weight_52w"]
     if rule_rsi_passed: total_score += params["weight_rsi"]
-    if rule_sharpe_passed: total_score += params["weight_sharpe"]
+    if rule_1w_passed: total_score += params["weight_1w"]
     if rule_flow_passed: total_score += params["weight_flow"]
 
     return {
@@ -358,7 +361,7 @@ def evaluate_weekly_rules(ticker: str, df: pd.DataFrame, benchmark_df: pd.DataFr
         "Pass_DD": rule_dd_passed, "Comm_DD": comm_dd,
         "Pass_52W": rule_52w_passed, "Comm_52W": comm_52w,
         "Pass_RSI": rule_rsi_passed, "Comm_RSI": comm_rsi,
-        "Pass_Sharpe": rule_sharpe_passed, "Comm_Sharpe": comm_sharpe,
+        "Pass_1W": rule_1w_passed, "Comm_1W": comm_1w,
         "Pass_Flow": rule_flow_passed, "Comm_Flow": comm_flow
     }
 
@@ -445,7 +448,7 @@ def show_scorecard_modal(ticker: str, benchmark_df: pd.DataFrame, params: dict):
                           delta=f"{params['weight_rs'] if res['Pass_RS'] else 0} / {params['weight_rs']} pts")
                 st.info(res["Comm_RS"])
             with c5:
-                st.metric("5. Weekly MACD", " PASS" if res["Pass_MACD"] else "X FAIL",
+                st.metric("5. MACD Expansion", " PASS" if res["Pass_MACD"] else "X FAIL",
                           delta=f"{params['weight_macd'] if res['Pass_MACD'] else 0} / {params['weight_macd']} pts")
                 st.info(res["Comm_MACD"])
             with c6:
@@ -461,13 +464,13 @@ def show_scorecard_modal(ticker: str, benchmark_df: pd.DataFrame, params: dict):
                           delta=f"{params['weight_52w'] if res['Pass_52W'] else 0} / {params['weight_52w']} pts")
                 st.info(res["Comm_52W"])
             with c8:
-                st.metric("8. Weekly RSI", " PASS" if res["Pass_RSI"] else "X FAIL",
+                st.metric("8. Weekly RSI Band", " PASS" if res["Pass_RSI"] else "X FAIL",
                           delta=f"{params['weight_rsi'] if res['Pass_RSI'] else 0} / {params['weight_rsi']} pts")
                 st.info(res["Comm_RSI"])
             with c9:
-                st.metric("9. 52W Sharpe", " PASS" if res["Pass_Sharpe"] else "X FAIL",
-                          delta=f"{params['weight_sharpe'] if res['Pass_Sharpe'] else 0} / {params['weight_sharpe']} pts")
-                st.info(res["Comm_Sharpe"])
+                st.metric("9. 1-Week Trigger", " PASS" if res["Pass_1W"] else "X FAIL",
+                          delta=f"{params['weight_1w'] if res['Pass_1W'] else 0} / {params['weight_1w']} pts")
+                st.info(res["Comm_1W"])
 
             st.markdown("---")
 
@@ -519,8 +522,8 @@ with st.sidebar:
         "weight_macd": int(weights[4]),
         "max_drawdown_pct": 12.0, "weight_dd": int(weights[5]),
         "max_dist_52w_pct": 10.0, "weight_52w": int(weights[6]),
-        "min_rsi": 48.0, "max_rsi": 68.0, "weight_rsi": int(weights[7]),
-        "min_sharpe": 0.5, "weight_sharpe": int(weights[8]),
+        "min_rsi": 48.0, "max_rsi": 62.0, "weight_rsi": int(weights[7]),
+        "weight_1w": int(weights[8]),
         "min_flow_score": 50.0, "weight_flow": int(weights[9])
     }
 
@@ -571,11 +574,11 @@ if should_run:
                 "Return": " Pass" if eval_res["Pass_Perf"] else "X Fail",
                 "OBV": " Pass" if eval_res["Pass_OBV"] else "X Fail",
                 "Rel Strength": eval_res["RS_Display"],
-                "MACD": " Pass" if eval_res["Pass_MACD"] else "X Fail",
+                "MACD Exp": " Pass" if eval_res["Pass_MACD"] else "X Fail",
                 "Drawdown": " Pass" if eval_res["Pass_DD"] else "X Fail",
                 "52W High": " Pass" if eval_res["Pass_52W"] else "X Fail",
                 "RSI Band": " Pass" if eval_res["Pass_RSI"] else "X Fail",
-                "Sharpe": " Pass" if eval_res["Pass_Sharpe"] else "X Fail",
+                "1W Direction": " Pass" if eval_res["Pass_1W"] else "X Fail",
                 "Flow": " Pass" if eval_res["Pass_Flow"] else "X Fail",
             })
         progress_bar.progress((idx + 1) / len(active_tickers))
@@ -599,8 +602,8 @@ if "last_screener_df" in st.session_state and not st.session_state["last_screene
         hide_index=True,
         column_order=[
             "Ticker", "Action", "Score", "Price",
-            "Trend", "Return", "OBV", "Rel Strength", "MACD",
-            "Drawdown", "52W High", "RSI Band", "Sharpe", "Flow"
+            "Trend", "Return", "OBV", "Rel Strength", "MACD Exp",
+            "Drawdown", "52W High", "RSI Band", "1W Direction", "Flow"
         ],
         column_config={
             "Ticker": st.column_config.TextColumn("Ticker"),
