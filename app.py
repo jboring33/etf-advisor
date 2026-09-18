@@ -6,8 +6,8 @@ import yfinance as yf
 import plotly.graph_objects as go
 
 st.set_page_config(
-    page_title="Weekly ETF Screener & Rule Engine",
-    page_icon="",
+    page_title="Universal Ticker Advisor & Weekly ETF Screener",
+    page_icon="📈",
     layout="wide"
 )
 
@@ -23,7 +23,7 @@ div.stButton > button[kind="primary"] {
 """, unsafe_allow_html=True)
 
 #
-# === EXACT URL & SESSION STATE SYNCHRONIZATION (UPPERCASE ENFORCED) ===
+# === EXACT URL & SESSION STATE SYNCHRONIZATION ===
 #
 def get_url_tickers() -> str:
     """Extracts ticker query parameter matching any casing and returns it converted to UPPERCASE."""
@@ -76,6 +76,72 @@ if "config_df_v2" not in st.session_state:
     ])
 
 #
+# === MACRO DATA FETCHING WITH ACCURATE SCALING & FALLBACK STATEMENT ===
+#
+@st.cache_data(ttl=900, show_spinner=False)
+def fetch_live_macro_indicators():
+    """
+    Fetches VIX and 10-Year Treasury Yield (^TNX).
+    Handles index scale variations and calculates true basis points change.
+    """
+    macro_data = {
+        "vix_val": None, "vix_pct": None, "vix_status": "Unavailable",
+        "tnx_val": None, "tnx_bps": None, "tnx_status": "Unavailable",
+        "is_valid": False
+    }
+    
+    try:
+        data = yf.download(["^VIX", "^TNX"], period="5d", progress=False, auto_adjust=True, threads=False)
+        if data is not None and not data.empty and "Close" in data:
+            closes = data["Close"]
+            
+            # 1. Parse Live VIX
+            if "^VIX" in closes.columns:
+                vix_series = closes["^VIX"].dropna()
+                if len(vix_series) >= 2:
+                    v_curr = float(vix_series.iloc[-1])
+                    v_prev = float(vix_series.iloc[-2])
+                    v_pct = ((v_curr - v_prev) / v_prev) * 100
+                    
+                    macro_data["vix_val"] = v_curr
+                    macro_data["vix_pct"] = v_pct
+                    if v_curr < 15:
+                        macro_data["vix_status"] = "Low Volatility 🟢"
+                    elif v_curr <= 22:
+                        macro_data["vix_status"] = "Moderate Volatility 🟡"
+                    else:
+                        macro_data["vix_status"] = "High Volatility 🔴"
+
+            # 2. Parse Live 10-Year Yield (^TNX) with scaling protection
+            if "^TNX" in closes.columns:
+                tnx_series = closes["^TNX"].dropna()
+                if len(tnx_series) >= 2:
+                    raw_curr = float(tnx_series.iloc[-1])
+                    raw_prev = float(tnx_series.iloc[-2])
+                    
+                    # Normalize scaling: ^TNX is often quoted scaled by 10 (e.g. 49.9 = 4.99%)
+                    curr_yield = raw_curr / 10.0 if raw_curr > 20.0 else raw_curr
+                    prev_yield = raw_prev / 10.0 if raw_prev > 20.0 else raw_prev
+                    
+                    # Calculate basis point change (1% delta = 100 bps)
+                    bps_change = (curr_yield - prev_yield) * 100
+                    
+                    macro_data["tnx_val"] = curr_yield
+                    macro_data["tnx_bps"] = bps_change
+                    if abs(bps_change) >= 10.0:
+                        macro_data["tnx_status"] = "Spiking ⚠️" if bps_change > 0 else "Dropping Sharply 📉"
+                    else:
+                        macro_data["tnx_status"] = "Stable 🟢"
+                        
+            if macro_data["vix_val"] is not None and macro_data["tnx_val"] is not None:
+                macro_data["is_valid"] = True
+                
+    except Exception:
+        pass
+        
+    return macro_data
+
+#
 # === DATA FETCHING & WEEKLY RESAMPLING ===
 #
 @st.cache_data(ttl=1800, show_spinner=False)
@@ -91,7 +157,6 @@ def fetch_weekly_etf_history(ticker: str) -> pd.DataFrame:
             ignore_tz=True
         )
         if df is not None and not df.empty:
-            # MultiIndex Column Flattening
             if isinstance(df.columns, pd.MultiIndex):
                 if ticker_clean in df.columns.levels[1]:
                     df = df.xs(key=ticker_clean, axis=1, level=1)
@@ -199,7 +264,6 @@ def evaluate_weekly_rules(ticker: str, df: pd.DataFrame, benchmark_df: pd.DataFr
         f"**Expected:** {params['ema_fast_w']}-WK EMA > {params['ema_slow_w']}-WK EMA."
     )
 
-    # Calculate Structural Stop-Loss Level (10-Wk EMA vs 8% Max Risk Floor)
     stop_loss_price = max(fast_val, latest_close * 0.92)
     stop_loss_pct = ((latest_close - stop_loss_price) / latest_close) * 100
 
@@ -257,7 +321,7 @@ def evaluate_weekly_rules(ticker: str, df: pd.DataFrame, benchmark_df: pd.DataFr
                 f"**Expected:** Alpha ≥ +{params['min_alpha_pct']}%."
             )
 
-    # 5. MACD Line & Histogram Expansion (Tightened Rule)
+    # 5. MACD Line & Histogram Expansion
     ema12 = close.ewm(span=params["macd_fast"], adjust=False).mean()
     ema26 = close.ewm(span=params["macd_slow"], adjust=False).mean()
     macd_line = ema12 - ema26
@@ -270,7 +334,6 @@ def evaluate_weekly_rules(ticker: str, df: pd.DataFrame, benchmark_df: pd.DataFr
     prev_hist = float(histogram.iloc[-2])
     
     rule_macd_passed = (latest_macd > latest_sig) and (latest_hist > 0) and (latest_hist >= prev_hist)
-    
     macd_status = "Bullish Cross" if latest_macd > latest_sig else "Bearish Signal Cross"
     comm_macd = (
         f"**What:** Evaluates MACD Line vs Signal Line AND Histogram expansion slope.\n\n"
@@ -323,7 +386,7 @@ def evaluate_weekly_rules(ticker: str, df: pd.DataFrame, benchmark_df: pd.DataFr
     return_1w_pct = ((latest_close - prev_close) / prev_close) * 100
     rule_1w_passed = return_1w_pct >= 0.0
     comm_1w = (
-        f"**What:** Price performance of the current week relative to last week's close (MANDATORY HARD GATE).\n\n"
+        f"**What:** Price performance of current week relative to last week's close (MANDATORY HARD GATE).\n\n"
         f"**Why:** Avoids buying into active short-term pullbacks; forces signal to HOLD if negative.\n\n"
         f"**Data:** 1-Week Return: {return_1w_pct:+.2f}%\n\n"
         f"**Expected:** 1-Week Return ≥ 0.0%."
@@ -417,7 +480,6 @@ def show_scorecard_modal(ticker: str, benchmark_df: pd.DataFrame, params: dict):
             st.plotly_chart(fig, use_container_width=True)
             st.markdown("---")
 
-            # Score Summary + Stop Loss Display
             action_label, action_type, action_desc = derive_action_signal(res["Score"], res["Pass_1W"])
             c_metric1, c_metric2, c_metric3 = st.columns([1, 1, 1])
             with c_metric1:
@@ -434,7 +496,6 @@ def show_scorecard_modal(ticker: str, benchmark_df: pd.DataFrame, params: dict):
             
             st.markdown("---")
 
-            # Rule Cards
             c1, c2, c3 = st.columns(3)
             with c1:
                 st.metric("1. Weekly Trend", " PASS" if res["Pass_MA"] else "X FAIL",
@@ -495,6 +556,32 @@ def show_scorecard_modal(ticker: str, benchmark_df: pd.DataFrame, params: dict):
 # === SIDEBAR ===
 #
 with st.sidebar:
+    st.header(" Configuration & Live Macro")
+    
+    # LIVE MACRO INDICATORS SECTION
+    macro_info = fetch_live_macro_indicators()
+    
+    if macro_info["is_valid"]:
+        m_col1, m_col2 = st.columns(2)
+        with m_col1:
+            st.metric(
+                label="Live VIX",
+                value=f"{macro_info['vix_val']:.2f}",
+                delta=f"{macro_info['vix_pct']:+.2f}%"
+            )
+            st.caption(f"Status: {macro_info['vix_status']}")
+            
+        with m_col2:
+            st.metric(
+                label="10-Yr Yield (^TNX)",
+                value=f"{macro_info['tnx_val']:.2f}%",
+                delta=f"{macro_info['tnx_bps']:+.1f} bps"
+            )
+            st.caption(f"Status: {macro_info['tnx_status']}")
+    else:
+        st.warning("⚠️ Live market macro data (VIX / ^TNX) is currently unavailable from source.")
+
+    st.markdown("---")
     st.header(" Weekly Points Configurator")
     st.caption("Adjust weight allocations across weekly rules (Must sum to 100).")
     
@@ -517,7 +604,7 @@ with st.sidebar:
     
     st.markdown(f"### **Total Points:** `{total_raw_points}`")
     if is_points_valid:
-        st.success(" **Weight total equals 100 pts.**")
+        st.success(" Weight total equals 100 pts.")
     else:
         diff = 100 - total_raw_points
         action_str = f"Add {diff} pts" if diff > 0 else f"Subtract {abs(diff)} pts"
@@ -627,7 +714,6 @@ if "last_screener_df" in st.session_state and not st.session_state["last_screene
         selection_mode="single-row"
     )
 
-    # Persist selection row for modal opening
     if event and event.selection and event.selection.rows:
         st.session_state["active_selected_row"] = event.selection.rows[0]
 
