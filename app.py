@@ -91,9 +91,15 @@ def fetch_weekly_etf_history(ticker: str) -> pd.DataFrame:
             ignore_tz=True
         )
         if df is not None and not df.empty:
+            # MultiIndex Column Flattening
             if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(0)
+                if ticker_clean in df.columns.levels[1]:
+                    df = df.xs(key=ticker_clean, axis=1, level=1)
+                else:
+                    df.columns = df.columns.get_level_values(0)
+            
             df = df.loc[:, ~df.columns.duplicated()]
+            
             if "Close" in df.columns and len(df) > 60:
                 weekly_df = pd.DataFrame()
                 weekly_df["Open"] = df["Open"].resample("W-FRI").first()
@@ -263,7 +269,6 @@ def evaluate_weekly_rules(ticker: str, df: pd.DataFrame, benchmark_df: pd.DataFr
     latest_hist = float(histogram.iloc[-1])
     prev_hist = float(histogram.iloc[-2])
     
-    # Strictly requires MACD > Signal Line AND Hist > 0 & Expanding
     rule_macd_passed = (latest_macd > latest_sig) and (latest_hist > 0) and (latest_hist >= prev_hist)
     
     macd_status = "Bullish Cross" if latest_macd > latest_sig else "Bearish Signal Cross"
@@ -324,13 +329,13 @@ def evaluate_weekly_rules(ticker: str, df: pd.DataFrame, benchmark_df: pd.DataFr
         f"**Expected:** 1-Week Return ≥ 0.0%."
     )
 
-    # 10. 12-Week Money Flow Index
+    # 10. Vectorized 12-Week Money Flow Index
     hist_vol = volume.tail(12)
     hist_close = close.tail(12)
     p_diff = hist_close.diff()
     directional_vol = np.where(p_diff >= 0, hist_vol, -hist_vol)
-    net_vol = np.nan_to_num(directional_vol).sum()
-    avg_vol = hist_vol.mean()
+    net_vol = float(np.nan_to_num(directional_vol).sum())
+    avg_vol = float(hist_vol.mean())
     flow_score = 50 if avg_vol == 0 else int(min(100, max(0, 50 + (net_vol / (avg_vol * 6)) * 50)))
     rule_flow_passed = flow_score >= params["min_flow_score"]
     comm_flow = (
@@ -416,7 +421,7 @@ def show_scorecard_modal(ticker: str, benchmark_df: pd.DataFrame, params: dict):
             action_label, action_type, action_desc = derive_action_signal(res["Score"], res["Pass_1W"])
             c_metric1, c_metric2, c_metric3 = st.columns([1, 1, 1])
             with c_metric1:
-                st.metric(label=f"Weekly Score", value=f"{res['Score']} / 100 Points")
+                st.metric(label="Weekly Score", value=f"{res['Score']} / 100 Points")
             with c_metric2:
                 st.metric(label="Rec. Stop-Loss Level", value=f"${res['Stop_Loss']:.2f}", delta=f"-{res['Stop_Loss_Pct']:.1f}% Risk", delta_color="inverse")
             with c_metric3:
@@ -622,7 +627,11 @@ if "last_screener_df" in st.session_state and not st.session_state["last_screene
         selection_mode="single-row"
     )
 
+    # Persist selection row for modal opening
     if event and event.selection and event.selection.rows:
-        selected_index = event.selection.rows[0]
+        st.session_state["active_selected_row"] = event.selection.rows[0]
+
+    if "active_selected_row" in st.session_state and st.session_state["active_selected_row"] < len(screener_df):
+        selected_index = st.session_state["active_selected_row"]
         selected_ticker = screener_df.iloc[selected_index]["Ticker"]
         show_scorecard_modal(selected_ticker, benchmark_df, RULE_PARAMS)
