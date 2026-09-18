@@ -76,13 +76,12 @@ if "config_df_v2" not in st.session_state:
     ])
 
 #
-# === ROBUST INDIVIDUAL TICKER MACRO FETCHING ===
+# === REAL-TIME INTRADAY MACRO FETCHING (FAST_INFO FIX) ===
 #
-@st.cache_data(ttl=900, show_spinner=False)
+@st.cache_data(ttl=60, show_spinner=False)
 def fetch_live_macro_indicators():
     """
-    Fetches VIX and 10-Year Treasury Yield (^TNX) individually.
-    Guarantees scaling isolation and accurate basis point change math.
+    Fetches real-time intraday data using fast_info to bypass stale daily historical buffers.
     """
     macro_data = {
         "vix_val": None, "vix_pct": None, "vix_status": "Unavailable",
@@ -91,16 +90,25 @@ def fetch_live_macro_indicators():
     }
     
     try:
-        # 1. Fetch VIX individually
-        vix_ticker = yf.Ticker("^VIX")
-        vix_hist = vix_ticker.history(period="5d")
-        if not vix_hist.empty and len(vix_hist) >= 2:
-            v_curr = float(vix_hist["Close"].iloc[-1])
-            v_prev = float(vix_hist["Close"].iloc[-2])
-            v_pct = ((v_curr - v_prev) / v_prev) * 100.0
-            
-            macro_data["vix_val"] = v_curr
-            macro_data["vix_pct"] = v_pct
+        # 1. Real-time VIX via fast_info & history fallback
+        vix_t = yf.Ticker("^VIX")
+        v_curr = getattr(vix_t.fast_info, 'last_price', None)
+        v_prev = getattr(vix_t.fast_info, 'previous_close', None)
+        
+        if v_curr is None or pd.isna(v_curr):
+            h = vix_t.history(period="2d")
+            if len(h) >= 2:
+                v_curr, v_prev = float(h["Close"].iloc[-1]), float(h["Close"].iloc[-2])
+            elif len(h) == 1:
+                v_curr = float(h["Close"].iloc[-1])
+
+        if v_curr and not pd.isna(v_curr):
+            macro_data["vix_val"] = float(v_curr)
+            if v_prev and not pd.isna(v_prev) and v_prev > 0:
+                macro_data["vix_pct"] = ((v_curr - v_prev) / v_prev) * 100.0
+            else:
+                macro_data["vix_pct"] = 0.0
+
             if v_curr < 15:
                 macro_data["vix_status"] = "Low Volatility 🟢"
             elif v_curr <= 22:
@@ -108,27 +116,35 @@ def fetch_live_macro_indicators():
             else:
                 macro_data["vix_status"] = "High Volatility 🔴"
 
-        # 2. Fetch 10-Year Yield (^TNX) individually
-        tnx_ticker = yf.Ticker("^TNX")
-        tnx_hist = tnx_ticker.history(period="5d")
-        if not tnx_hist.empty and len(tnx_hist) >= 2:
-            raw_curr = float(tnx_hist["Close"].iloc[-1])
-            raw_prev = float(tnx_hist["Close"].iloc[-2])
-            
-            # Normalize scaling: ^TNX is quoted as 49.9 when yield is 4.99%
+        # 2. Real-time 10-Year Yield (^TNX) via fast_info & scaling check
+        tnx_t = yf.Ticker("^TNX")
+        raw_curr = getattr(tnx_t.fast_info, 'last_price', None)
+        raw_prev = getattr(tnx_t.fast_info, 'previous_close', None)
+        
+        if raw_curr is None or pd.isna(raw_curr):
+            h_tnx = tnx_t.history(period="2d")
+            if len(h_tnx) >= 2:
+                raw_curr, raw_prev = float(h_tnx["Close"].iloc[-1]), float(h_tnx["Close"].iloc[-2])
+            elif len(h_tnx) == 1:
+                raw_curr = float(h_tnx["Close"].iloc[-1])
+
+        if raw_curr and not pd.isna(raw_curr):
+            # Normalize scaling: Convert raw index values (e.g., 49.4 -> 4.94%)
             curr_yield = raw_curr / 10.0 if raw_curr > 20.0 else raw_curr
-            prev_yield = raw_prev / 10.0 if raw_prev > 20.0 else raw_prev
-            
-            # Calculate actual basis points difference: (4.99 - 4.91) * 100 = +8.0 bps
-            bps_change = (curr_yield - prev_yield) * 100.0
-            
-            macro_data["tnx_val"] = curr_yield
-            macro_data["tnx_bps"] = bps_change
-            if abs(bps_change) >= 10.0:
-                macro_data["tnx_status"] = "Spiking ⚠️" if bps_change > 0 else "Dropping Sharply 📉"
+            macro_data["tnx_val"] = float(curr_yield)
+
+            if raw_prev and not pd.isna(raw_prev) and raw_prev > 0:
+                prev_yield = raw_prev / 10.0 if raw_prev > 20.0 else raw_prev
+                # Real basis point change: (4.94 - 5.00) * 100 = -6.0 bps
+                macro_data["tnx_bps"] = (curr_yield - prev_yield) * 100.0
+            else:
+                macro_data["tnx_bps"] = 0.0
+
+            if abs(macro_data["tnx_bps"]) >= 10.0:
+                macro_data["tnx_status"] = "Spiking ⚠️" if macro_data["tnx_bps"] > 0 else "Dropping Sharply 📉"
             else:
                 macro_data["tnx_status"] = "Stable 🟢"
-                
+
         if macro_data["vix_val"] is not None and macro_data["tnx_val"] is not None:
             macro_data["is_valid"] = True
 
