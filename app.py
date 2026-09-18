@@ -8,8 +8,11 @@ import io
 import plotly.graph_objects as go
 from datetime import datetime
 
+#
+# === APP CONFIGURATION & STYLING ===
+#
 st.set_page_config(
-    page_title="Universal Ticker Advisor & Weekly ETF Screener",
+    page_title="Universal Ticker Advisor & Portfolio Engine",
     page_icon="📈",
     layout="wide"
 )
@@ -83,17 +86,13 @@ if "config_df_v2" not in st.session_state:
 #
 @st.cache_data(ttl=60, show_spinner=False)
 def fetch_live_macro_indicators():
-    """
-    Directly queries Federal Reserve Economic Data (FRED) for VIX (VIXCLS) 
-    and 10-Yr Treasury Yield (DGS10) to bypass third-party rate limits.
-    """
+    """Directly queries FRED and Stooq for VIX and 10-Yr Treasury Yield."""
     macro_data = {
         "vix_val": None, "vix_pct": None, "vix_status": "Unavailable", "vix_source": "None",
         "tnx_val": None, "tnx_bps": None, "tnx_status": "Unavailable", "tnx_source": "None",
         "is_valid": False,
         "fetch_timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     }
-    
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
 
     def get_fred_series(series_id: str) -> pd.Series:
@@ -110,7 +109,7 @@ def fetch_live_macro_indicators():
             pass
         return pd.Series(dtype=float)
 
-    # 1. Fetch VIX
+    # 1. VIX Fetch
     vix_series = get_fred_series("VIXCLS")
     v_curr, v_prev = None, None
 
@@ -132,7 +131,6 @@ def fetch_live_macro_indicators():
     if v_curr is not None:
         macro_data["vix_val"] = v_curr
         macro_data["vix_pct"] = ((v_curr - v_prev) / v_prev) * 100.0 if v_prev and v_prev > 0 else 0.0
-
         if v_curr < 15.0:
             macro_data["vix_status"] = "Low Volatility 🟢"
         elif v_curr <= 22.0:
@@ -140,7 +138,7 @@ def fetch_live_macro_indicators():
         else:
             macro_data["vix_status"] = "High Volatility 🔴"
 
-    # 2. Fetch 10-Yr Yield
+    # 2. 10Y Treasury Fetch
     tnx_series = get_fred_series("DGS10")
     t_curr, t_prev = None, None
 
@@ -162,10 +160,8 @@ def fetch_live_macro_indicators():
     if t_curr is not None:
         t_curr = t_curr / 10.0 if t_curr > 20.0 else t_curr
         t_prev = t_prev / 10.0 if t_prev and t_prev > 20.0 else t_prev
-
         macro_data["tnx_val"] = t_curr
         macro_data["tnx_bps"] = (t_curr - t_prev) * 100.0 if t_prev else 0.0
-
         if abs(macro_data["tnx_bps"]) >= 10.0:
             macro_data["tnx_status"] = "Spiking ⚠️" if macro_data["tnx_bps"] > 0 else "Dropping Sharply 📉"
         else:
@@ -184,12 +180,8 @@ def fetch_weekly_etf_history(ticker: str) -> pd.DataFrame:
     ticker_clean = ticker.strip().upper()
     try:
         df = yf.download(
-            ticker_clean,
-            period="2y",
-            progress=False,
-            auto_adjust=True,
-            threads=False,
-            ignore_tz=True
+            ticker_clean, period="2y", progress=False,
+            auto_adjust=True, threads=False, ignore_tz=True
         )
         if df is not None and not df.empty:
             if isinstance(df.columns, pd.MultiIndex):
@@ -197,9 +189,7 @@ def fetch_weekly_etf_history(ticker: str) -> pd.DataFrame:
                     df = df.xs(key=ticker_clean, axis=1, level=1)
                 else:
                     df.columns = df.columns.get_level_values(0)
-            
             df = df.loc[:, ~df.columns.duplicated()]
-            
             if "Close" in df.columns and len(df) > 60:
                 weekly_df = pd.DataFrame()
                 weekly_df["Open"] = df["Open"].resample("W-FRI").first()
@@ -218,37 +208,12 @@ def fetch_etf_metadata(ticker: str) -> dict:
     try:
         t = yf.Ticker(ticker_clean)
         info = t.info if t and hasattr(t, 'info') and isinstance(t.info, dict) else {}
-        
-        desc = (
-            info.get("longBusinessSummary") or 
-            info.get("description") or 
-            info.get("fundSummary") or 
-            f"No summary available for {ticker_clean}."
-        )
-        geo = (
-            info.get("region") or 
-            info.get("country") or 
-            info.get("market") or 
-            ("US" if info.get("exchange") in ["NYQ", "NMS", "NAS", "PCX", "ARC"] else "US / Global")
-        )
-        cat = (
-            info.get("category") or 
-            info.get("categoryName") or 
-            info.get("quoteType") or 
-            info.get("assetClass") or 
-            "Equity / ETF"
-        )
-        return {
-            "description": str(desc),
-            "region": str(geo).upper() if len(str(geo)) <= 3 else str(geo).title(),
-            "category": str(cat).title()
-        }
+        desc = info.get("longBusinessSummary") or info.get("description") or info.get("fundSummary") or f"No summary available for {ticker_clean}."
+        geo = info.get("region") or info.get("country") or info.get("market") or ("US" if info.get("exchange") in ["NYQ", "NMS", "NAS", "PCX", "ARC"] else "US / Global")
+        cat = info.get("category") or info.get("categoryName") or info.get("quoteType") or info.get("assetClass") or "Equity / ETF"
+        return {"description": str(desc), "region": str(geo).upper() if len(str(geo)) <= 3 else str(geo).title(), "category": str(cat).title()}
     except Exception:
-        return {
-            "description": f"Details unavailable for {ticker_clean}.",
-            "region": "US / Global",
-            "category": "Equity / ETF"
-        }
+        return {"description": f"Details unavailable for {ticker_clean}.", "region": "US / Global", "category": "Equity / ETF"}
 
 #
 # === TECHNICAL HELPER FUNCTIONS ===
@@ -291,12 +256,7 @@ def evaluate_weekly_rules(ticker: str, df: pd.DataFrame, benchmark_df: pd.DataFr
     fast_val = float(ema_fast.iloc[-1])
     slow_val = float(ema_slow.iloc[-1])
     rule_ma_passed = fast_val > slow_val
-    comm_ma = (
-        f"**What:** Short-term weekly moving average ({params['ema_fast_w']}-EMA) vs structural weekly baseline ({params['ema_slow_w']}-EMA).\n\n"
-        f"**Why:** Ensures the ETF is in a sustained primary uptrend.\n\n"
-        f"**Data:** {params['ema_fast_w']}-Wk EMA (${fast_val:.2f}) vs {params['ema_slow_w']}-Wk EMA (${slow_val:.2f})\n\n"
-        f"**Expected:** {params['ema_fast_w']}-WK EMA > {params['ema_slow_w']}-WK EMA."
-    )
+    comm_ma = f"**What:** 10-Wk EMA (${fast_val:.2f}) vs 30-Wk EMA (${slow_val:.2f})\n\n**Expected:** Fast EMA > Slow EMA."
 
     stop_loss_price = max(fast_val, latest_close * 0.92)
     stop_loss_pct = ((latest_close - stop_loss_price) / latest_close) * 100
@@ -305,12 +265,7 @@ def evaluate_weekly_rules(ticker: str, df: pd.DataFrame, benchmark_df: pd.DataFr
     past_close = float(close.iloc[-lookback_weeks])
     period_return_pct = ((latest_close - past_close) / past_close) * 100
     rule_perf_passed = period_return_pct >= params["min_return_pct"]
-    comm_perf = (
-        f"**What:** 3-month trailing absolute percentage change.\n\n"
-        f"**Why:** Confirms underlying price expansion and positive quarterly momentum.\n\n"
-        f"**Data:** {lookback_weeks}-Week Return: {period_return_pct:+.2f}%\n\n"
-        f"**Expected:** Return ≥ +{params['min_return_pct']}%."
-    )
+    comm_perf = f"**What:** {lookback_weeks}-Week Return: {period_return_pct:+.2f}%\n\n**Expected:** Return ≥ +{params['min_return_pct']}%."
 
     price_diff = close.diff()
     direction = np.where(price_diff > 0, 1, np.where(price_diff < 0, -1, 0))
@@ -319,23 +274,14 @@ def evaluate_weekly_rules(ticker: str, df: pd.DataFrame, benchmark_df: pd.DataFr
     latest_obv = float(obv.iloc[-1]) if not obv.empty else 0.0
     latest_obv_sma = float(obv_sma20.iloc[-1]) if not obv_sma20.empty else 0.0
     rule_obv_passed = latest_obv > latest_obv_sma
-    comm_obv = (
-        f"**What:** Cumulative On-Balance Volume relative to its 20-week simple moving average.\n\n"
-        f"**Why:** Verifies volume is expanding on up weeks, signalling institutional accumulation.\n\n"
-        f"**Data:** OBV ({latest_obv:,.0f}) vs 20-Wk SMA ({latest_obv_sma:,.0f})\n\n"
-        f"**Expected:** Weekly OBV > 20-Wk OBV SMA."
-    )
+    comm_obv = f"**What:** OBV ({latest_obv:,.0f}) vs 20-Wk SMA ({latest_obv_sma:,.0f})\n\n**Expected:** OBV > 20-Wk OBV SMA."
 
     alpha_pct = 0.0
     rule_rs_passed = False
     rs_display = "X Fail"
     if ticker_upper == "SPY":
         rs_display = "N/A"
-        comm_rs = (
-            f"**What:** Outperformance (Alpha) compared to SPY over {lookback_weeks} weeks.\n\n"
-            f"**Why:** Evaluated ticker is SPY (benchmark baseline).\n\n"
-            f"**Data:** N/A (Benchmark Baseline)"
-        )
+        comm_rs = "**What:** SPY Benchmark Baseline (N/A)"
     else:
         if not benchmark_df.empty and len(benchmark_df) >= lookback_weeks:
             bench_close = pd.Series(benchmark_df["Close"].values.flatten())
@@ -345,32 +291,21 @@ def evaluate_weekly_rules(ticker: str, df: pd.DataFrame, benchmark_df: pd.DataFr
             alpha_pct = period_return_pct - bench_return
             rule_rs_passed = alpha_pct >= params["min_alpha_pct"]
             rs_display = " PASS" if rule_rs_passed else "X Fail"
-            comm_rs = (
-                f"**What:** Excess return (Alpha) generated over SPY over {lookback_weeks} weeks.\n\n"
-                f"**Why:** Filters for market leaders outperforming the broad index.\n\n"
-                f"**Data:** {lookback_weeks}-Week Alpha vs SPY: {alpha_pct:+.2f}%\n\n"
-                f"**Expected:** Alpha ≥ +{params['min_alpha_pct']}%."
-            )
+            comm_rs = f"**What:** Alpha vs SPY: {alpha_pct:+.2f}%\n\n**Expected:** Alpha ≥ +{params['min_alpha_pct']}%."
+        else:
+            comm_rs = "**What:** SPY benchmark baseline data missing."
 
     ema12 = close.ewm(span=params["macd_fast"], adjust=False).mean()
     ema26 = close.ewm(span=params["macd_slow"], adjust=False).mean()
     macd_line = ema12 - ema26
     signal_line = macd_line.ewm(span=params["macd_signal"], adjust=False).mean()
     histogram = macd_line - signal_line
-    
     latest_macd = float(macd_line.iloc[-1])
     latest_sig = float(signal_line.iloc[-1])
     latest_hist = float(histogram.iloc[-1])
-    prev_hist = float(histogram.iloc[-2])
-    
+    prev_hist = float(histogram.iloc[-2]) if len(histogram) >= 2 else latest_hist
     rule_macd_passed = (latest_macd > latest_sig) and (latest_hist > 0) and (latest_hist >= prev_hist)
-    macd_status = "Bullish Cross" if latest_macd > latest_sig else "Bearish Signal Cross"
-    comm_macd = (
-        f"**What:** Evaluates MACD Line vs Signal Line AND Histogram expansion slope.\n\n"
-        f"**Why:** Prevents entering positions when short-term momentum has rolled over below signal line.\n\n"
-        f"**Data:** MACD ({latest_macd:+.2f}) vs Signal ({latest_sig:+.2f}) [{macd_status}] | Hist: {latest_hist:+.3f}\n\n"
-        f"**Expected:** MACD > Signal Line AND Histogram > 0 & Expanding."
-    )
+    comm_macd = f"**What:** MACD ({latest_macd:+.2f}) vs Sig ({latest_sig:+.2f}) | Hist: {latest_hist:+.3f}\n\n**Expected:** MACD > Signal & Hist > 0."
 
     max_dd_pct = 0.0
     rule_dd_passed = False
@@ -380,12 +315,9 @@ def evaluate_weekly_rules(ticker: str, df: pd.DataFrame, benchmark_df: pd.DataFr
         drawdown = (tail_26 - rolling_max) / rolling_max
         max_dd_pct = abs(float(drawdown.min())) * 100
         rule_dd_passed = max_dd_pct <= params["max_drawdown_pct"]
-        comm_dd = (
-            f"**What:** Maximum peak-to-trough decline over 26 weeks.\n\n"
-            f"**Why:** Filters out highly volatile, crash-prone assets.\n\n"
-            f"**Data:** 26-Week Max Drawdown: {max_dd_pct:.2f}%\n\n"
-            f"**Expected:** Drawdown ≤ {params['max_drawdown_pct']}%."
-        )
+        comm_dd = f"**What:** 26-Wk Max Drawdown: {max_dd_pct:.2f}%\n\n**Expected:** Drawdown ≤ {params['max_drawdown_pct']}%."
+    else:
+        comm_dd = "**What:** Insufficient history for 26-Wk drawdown calculation."
 
     dist_52w_high_pct = 0.0
     rule_52w_passed = False
@@ -393,30 +325,17 @@ def evaluate_weekly_rules(ticker: str, df: pd.DataFrame, benchmark_df: pd.DataFr
         high_52w = float(close.tail(52).max())
         dist_52w_high_pct = ((high_52w - latest_close) / high_52w) * 100
         rule_52w_passed = dist_52w_high_pct <= params["max_dist_52w_pct"]
-        comm_52w = (
-            f"**What:** Percentage distance from current price to the 52-week high.\n\n"
-            f"**Why:** Leading assets trade near high ground; avoids structural laggards.\n\n"
-            f"**Data:** Distance from 52-Wk High: {dist_52w_high_pct:.2f}%\n\n"
-            f"**Expected:** Distance < {params['max_dist_52w_pct']}%."
-        )
+        comm_52w = f"**What:** Dist from 52W High: {dist_52w_high_pct:.2f}%\n\n**Expected:** Dist < {params['max_dist_52w_pct']}%."
+    else:
+        comm_52w = "**What:** Insufficient history for 52-Wk high proximity calculation."
 
     rsi_val = calculate_weekly_rsi(close, period=14)
     rule_rsi_passed = (rsi_val >= params["min_rsi"]) and (rsi_val <= params["max_rsi"])
-    comm_rsi = (
-        f"**What:** 14-week Relative Strength Index value.\n\n"
-        f"**Why:** Avoids buying peak overextended levels.\n\n"
-        f"**Data:** 14-Week RSI: {rsi_val:.1f}\n\n"
-        f"**Expected:** RSI between {params['min_rsi']} and {params['max_rsi']}."
-    )
+    comm_rsi = f"**What:** 14-Wk RSI: {rsi_val:.1f}\n\n**Expected:** RSI between {params['min_rsi']} and {params['max_rsi']}."
 
     return_1w_pct = ((latest_close - prev_close) / prev_close) * 100
     rule_1w_passed = return_1w_pct >= 0.0
-    comm_1w = (
-        f"**What:** Price performance of current week relative to last week's close (MANDATORY HARD GATE).\n\n"
-        f"**Why:** Avoids buying into active short-term pullbacks; forces signal to HOLD if negative.\n\n"
-        f"**Data:** 1-Week Return: {return_1w_pct:+.2f}%\n\n"
-        f"**Expected:** 1-Week Return ≥ 0.0%."
-    )
+    comm_1w = f"**What:** 1-Wk Return: {return_1w_pct:+.2f}%\n\n**Expected:** 1-Wk Return ≥ 0.0%."
 
     hist_vol = volume.tail(12)
     hist_close = close.tail(12)
@@ -426,12 +345,7 @@ def evaluate_weekly_rules(ticker: str, df: pd.DataFrame, benchmark_df: pd.DataFr
     avg_vol = float(hist_vol.mean())
     flow_score = 50 if avg_vol == 0 else int(min(100, max(0, 50 + (net_vol / (avg_vol * 6)) * 50)))
     rule_flow_passed = flow_score >= params["min_flow_score"]
-    comm_flow = (
-        f"**What:** Volume-weighted price direction score over trailing 12 weeks.\n\n"
-        f"**Why:** Measures net capital inflows vs outflows.\n\n"
-        f"**Data:** 12-Week Flow Index: {flow_score}/100\n\n"
-        f"**Expected:** Flow Index ≥ {params['min_flow_score']:.0f}."
-    )
+    comm_flow = f"**What:** 12-Wk Flow Index: {flow_score}/100\n\n**Expected:** Flow Index ≥ {params['min_flow_score']:.0f}."
 
     total_score = 0
     if rule_ma_passed: total_score += params["weight_ma"]
@@ -446,10 +360,8 @@ def evaluate_weekly_rules(ticker: str, df: pd.DataFrame, benchmark_df: pd.DataFr
     if rule_flow_passed: total_score += params["weight_flow"]
 
     return {
-        "Score": total_score,
-        "Close": latest_close,
-        "Stop_Loss": stop_loss_price,
-        "Stop_Loss_Pct": stop_loss_pct,
+        "Score": total_score, "Close": latest_close,
+        "Stop_Loss": stop_loss_price, "Stop_Loss_Pct": stop_loss_pct,
         "Pass_MA": rule_ma_passed, "Comm_MA": comm_ma,
         "Pass_Perf": rule_perf_passed, "Comm_Perf": comm_perf,
         "Pass_OBV": rule_obv_passed, "Comm_OBV": comm_obv,
@@ -482,25 +394,18 @@ def show_scorecard_modal(ticker: str, benchmark_df: pd.DataFrame, params: dict):
             st.caption(f"**Description:** {meta['description']}")
             st.markdown("---")
 
-            st.write("### Weekly Candlestick Trend")
             fig = go.Figure(data=[
                 go.Candlestick(
-                    x=df['Date'],
-                    open=df['Open'],
-                    high=df['High'],
-                    low=df['Low'],
-                    close=df['Close'],
-                    increasing_line_color='#00E676',
-                    increasing_fillcolor='rgba(0,0,0,0)',
-                    decreasing_line_color='#FF5252',
-                    decreasing_fillcolor='#FF5252'
+                    x=df['Date'], open=df['Open'], high=df['High'],
+                    low=df['Low'], close=df['Close'],
+                    increasing_line_color='#00E676', increasing_fillcolor='rgba(0,0,0,0)',
+                    decreasing_line_color='#FF5252', decreasing_fillcolor='#FF5252'
                 )
             ])
             fig.update_layout(
                 xaxis_rangeslider_visible=False,
                 margin=dict(l=10, r=10, t=10, b=10),
-                height=300,
-                template="plotly_dark"
+                height=300, template="plotly_dark"
             )
             st.plotly_chart(fig, use_container_width=True)
             st.markdown("---")
@@ -523,56 +428,46 @@ def show_scorecard_modal(ticker: str, benchmark_df: pd.DataFrame, params: dict):
 
             c1, c2, c3 = st.columns(3)
             with c1:
-                st.metric("1. Weekly Trend", " PASS" if res["Pass_MA"] else "X FAIL",
-                          delta=f"{params['weight_ma'] if res['Pass_MA'] else 0} / {params['weight_ma']} pts")
+                st.metric("1. Weekly Trend", " PASS" if res["Pass_MA"] else "X FAIL", delta=f"{params['weight_ma'] if res['Pass_MA'] else 0} / {params['weight_ma']} pts")
                 st.info(res["Comm_MA"])
             with c2:
-                st.metric("2. 12W Return", " PASS" if res["Pass_Perf"] else "X FAIL",
-                          delta=f"{params['weight_perf'] if res['Pass_Perf'] else 0} / {params['weight_perf']} pts")
+                st.metric("2. 12W Return", " PASS" if res["Pass_Perf"] else "X FAIL", delta=f"{params['weight_perf'] if res['Pass_Perf'] else 0} / {params['weight_perf']} pts")
                 st.info(res["Comm_Perf"])
             with c3:
-                st.metric("3. Weekly OBV", " PASS" if res["Pass_OBV"] else "X FAIL",
-                          delta=f"{params['weight_obv'] if res['Pass_OBV'] else 0} / {params['weight_obv']} pts")
+                st.metric("3. Weekly OBV", " PASS" if res["Pass_OBV"] else "X FAIL", delta=f"{params['weight_obv'] if res['Pass_OBV'] else 0} / {params['weight_obv']} pts")
                 st.info(res["Comm_OBV"])
 
             st.markdown("---")
 
             c4, c5, c6 = st.columns(3)
             with c4:
-                st.metric("4. 12W Rel Strength", res["RS_Display"], 
-                          delta=f"{params['weight_rs'] if res['Pass_RS'] else 0} / {params['weight_rs']} pts")
+                st.metric("4. 12W Rel Strength", res["RS_Display"], delta=f"{params['weight_rs'] if res['Pass_RS'] else 0} / {params['weight_rs']} pts")
                 st.info(res["Comm_RS"])
             with c5:
-                st.metric("5. MACD Line & Exp", " PASS" if res["Pass_MACD"] else "X FAIL",
-                          delta=f"{params['weight_macd'] if res['Pass_MACD'] else 0} / {params['weight_macd']} pts")
+                st.metric("5. MACD Line & Exp", " PASS" if res["Pass_MACD"] else "X FAIL", delta=f"{params['weight_macd'] if res['Pass_MACD'] else 0} / {params['weight_macd']} pts")
                 st.info(res["Comm_MACD"])
             with c6:
-                st.metric("6. 26W Drawdown", " PASS" if res["Pass_DD"] else "X FAIL",
-                          delta=f"{params['weight_dd'] if res['Pass_DD'] else 0} / {params['weight_dd']} pts")
+                st.metric("6. 26W Drawdown", " PASS" if res["Pass_DD"] else "X FAIL", delta=f"{params['weight_dd'] if res['Pass_DD'] else 0} / {params['weight_dd']} pts")
                 st.info(res["Comm_DD"])
 
             st.markdown("---")
 
             c7, c8, c9 = st.columns(3)
             with c7:
-                st.metric("7. 52W High Prox.", " PASS" if res["Pass_52W"] else "X FAIL",
-                          delta=f"{params['weight_52w'] if res['Pass_52W'] else 0} / {params['weight_52w']} pts")
+                st.metric("7. 52W High Prox.", " PASS" if res["Pass_52W"] else "X FAIL", delta=f"{params['weight_52w'] if res['Pass_52W'] else 0} / {params['weight_52w']} pts")
                 st.info(res["Comm_52W"])
             with c8:
-                st.metric("8. Weekly RSI Band", " PASS" if res["Pass_RSI"] else "X FAIL",
-                          delta=f"{params['weight_rsi'] if res['Pass_RSI'] else 0} / {params['weight_rsi']} pts")
+                st.metric("8. Weekly RSI Band", " PASS" if res["Pass_RSI"] else "X FAIL", delta=f"{params['weight_rsi'] if res['Pass_RSI'] else 0} / {params['weight_rsi']} pts")
                 st.info(res["Comm_RSI"])
             with c9:
-                st.metric("9. 1W Gate", " PASS" if res["Pass_1W"] else "X FAIL",
-                          delta=f"{params['weight_1w'] if res['Pass_1W'] else 0} / {params['weight_1w']} pts")
+                st.metric("9. 1W Gate", " PASS" if res["Pass_1W"] else "X FAIL", delta=f"{params['weight_1w'] if res['Pass_1W'] else 0} / {params['weight_1w']} pts")
                 st.info(res["Comm_1W"])
 
             st.markdown("---")
 
             c10, _ = st.columns([1, 2])
             with c10:
-                st.metric("10. Money Flow Index", " PASS" if res["Pass_Flow"] else "X FAIL",
-                          delta=f"{params['weight_flow'] if res['Pass_Flow'] else 0} / {params['weight_flow']} pts")
+                st.metric("10. Money Flow Index", " PASS" if res["Pass_Flow"] else "X FAIL", delta=f"{params['weight_flow'] if res['Pass_Flow'] else 0} / {params['weight_flow']} pts")
                 st.info(res["Comm_Flow"])
         else:
             st.error(f"Could not retrieve historical data for '{ticker}'.")
@@ -649,9 +544,9 @@ with st.sidebar:
     }
 
 #
-# === MAIN INTERFACE ===
+# === MAIN UI TOP-LEVEL NAVIGATION & DIAGNOSTICS ===
 #
-st.title(" Weekly ETF Screener & Analysis")
+st.title(" Universal Ticker Advisor & Portfolio Engine")
 
 # --- RAW VALUES DIAGNOSTIC PANEL ---
 raw_data = fetch_live_macro_indicators()
@@ -673,95 +568,164 @@ with st.expander("🔍 RAW MACRO FETCH DIAGNOSTICS (Core Incoming Values)", expa
             st.cache_data.clear()
             st.rerun()
 
+#
+# === NAVIGATION TABS ===
+#
+tab_screener, tab_advisor, tab_allocator = st.tabs([
+    "📊 Weekly ETF Screener", 
+    "🎯 Universal Ticker Advisor", 
+    "💼 Portfolio Allocator"
+])
+
 benchmark_df = fetch_weekly_etf_history("SPY")
 
-if not is_points_valid:
-    st.error(f"! Points allocation total is currently {total_raw_points} pts. Please balance weights to 100 in the Sidebar Configurator.")
-
-tickers_input = st.text_area(
-    "Tickers to Score:",
-    height=120,
-    key="tickers_input_field",
-    on_change=sync_and_uppercase_params
-)
-
-btn_run_screen = st.button(
-    "Run Ticker Screen",
-    type="primary",
-    disabled=not is_points_valid or not tickers_input.strip(),
-    use_container_width=True
-)
-
-should_run = btn_run_screen or ("auto_ran_on_load" not in st.session_state and bool(tickers_input.strip()))
-
-if should_run:
-    st.session_state["auto_ran_on_load"] = True
-    active_tickers = [t.strip().upper() for t in tickers_input.replace("\n", ",").split(",") if t.strip()]
-    results = []
+#
+# TAB 1: WEEKLY ETF SCREENER
+#
+with tab_screener:
+    st.subheader("Weekly Scoring Matrix & Screening Engine")
     
-    progress_bar = st.progress(0)
-    for idx, ticker in enumerate(active_tickers):
-        df = fetch_weekly_etf_history(ticker)
-        eval_res = evaluate_weekly_rules(ticker, df, benchmark_df, RULE_PARAMS)
-        if eval_res is not None:
-            action_sig, _, _ = derive_action_signal(eval_res["Score"], eval_res["Pass_1W"])
-            results.append({
-                "Ticker": ticker,
-                "Action": action_sig,
-                "Score": eval_res["Score"],
-                "Price_Raw": eval_res['Close'],
-                "Price": f"${eval_res['Close']:.2f}",
-                "Rec. Stop": f"${eval_res['Stop_Loss']:.2f} (-{eval_res['Stop_Loss_Pct']:.1f}%)",
-                "Trend": " Pass" if eval_res["Pass_MA"] else "X Fail",
-                "Return": " Pass" if eval_res["Pass_Perf"] else "X Fail",
-                "OBV": " Pass" if eval_res["Pass_OBV"] else "X Fail",
-                "Rel Strength": eval_res["RS_Display"],
-                "MACD Exp": " Pass" if eval_res["Pass_MACD"] else "X Fail",
-                "Drawdown": " Pass" if eval_res["Pass_DD"] else "X Fail",
-                "52W High": " Pass" if eval_res["Pass_52W"] else "X Fail",
-                "RSI Band": " Pass" if eval_res["Pass_RSI"] else "X Fail",
-                "1W Direction": " Pass" if eval_res["Pass_1W"] else "X Fail",
-                "Flow": " Pass" if eval_res["Pass_Flow"] else "X Fail",
-            })
-        progress_bar.progress((idx + 1) / len(active_tickers))
-    progress_bar.empty()
+    if not is_points_valid:
+        st.error(f"! Points allocation total is currently {total_raw_points} pts. Please balance weights to 100 in the Sidebar Configurator.")
 
-    if results:
-        res_df = pd.DataFrame(results)
-        res_df = res_df.sort_values(by="Score", ascending=False).reset_index(drop=True)
-        st.session_state["last_screener_df"] = res_df
-        st.session_state["last_screener_title"] = "Weekly Scoring Matrix Results"
-    else:
-        st.warning("Could not retrieve valid historical data for any provided tickers.")
-
-if "last_screener_df" in st.session_state and not st.session_state["last_screener_df"].empty:
-    st.subheader(st.session_state.get("last_screener_title", "Weekly Scoring Matrix Results"))
-    st.caption(" Select any row to pop open its detailed Scorecard modal window.")
-    
-    screener_df = st.session_state["last_screener_df"]
-    event = st.dataframe(
-        screener_df.drop(columns=["Price_Raw"]),
-        hide_index=True,
-        column_order=[
-            "Ticker", "Action", "Score", "Price", "Rec. Stop",
-            "Trend", "Return", "OBV", "Rel Strength", "MACD Exp",
-            "Drawdown", "52W High", "RSI Band", "1W Direction", "Flow"
-        ],
-        column_config={
-            "Ticker": st.column_config.TextColumn("Ticker"),
-            "Action": st.column_config.TextColumn("Signal", help="BUY (≥70 & 1W Pass), HOLD (45-69 or 1W Fail), SELL (<45)"),
-            "Score": st.column_config.NumberColumn("Score", format="%d pts"),
-            "Rec. Stop": st.column_config.TextColumn("Rec. Stop", help="10-Wk EMA structural trailing stop level")
-        },
-        use_container_width=True,
-        on_select="rerun",
-        selection_mode="single-row"
+    tickers_input = st.text_area(
+        "Tickers to Score:",
+        height=120,
+        key="tickers_input_field",
+        on_change=sync_and_uppercase_params
     )
 
-    if event and event.selection and event.selection.rows:
-        st.session_state["active_selected_row"] = event.selection.rows[0]
+    btn_run_screen = st.button(
+        "Run Ticker Screen",
+        type="primary",
+        disabled=not is_points_valid or not tickers_input.strip(),
+        use_container_width=True
+    )
 
-    if "active_selected_row" in st.session_state and st.session_state["active_selected_row"] < len(screener_df):
-        selected_index = st.session_state["active_selected_row"]
-        selected_ticker = screener_df.iloc[selected_index]["Ticker"]
-        show_scorecard_modal(selected_ticker, benchmark_df, RULE_PARAMS)
+    should_run = btn_run_screen or ("auto_ran_on_load" not in st.session_state and bool(tickers_input.strip()))
+
+    if should_run:
+        st.session_state["auto_ran_on_load"] = True
+        active_tickers = [t.strip().upper() for t in tickers_input.replace("\n", ",").split(",") if t.strip()]
+        results = []
+        
+        progress_bar = st.progress(0)
+        for idx, ticker in enumerate(active_tickers):
+            df = fetch_weekly_etf_history(ticker)
+            eval_res = evaluate_weekly_rules(ticker, df, benchmark_df, RULE_PARAMS)
+            if eval_res is not None:
+                action_sig, _, _ = derive_action_signal(eval_res["Score"], eval_res["Pass_1W"])
+                results.append({
+                    "Ticker": ticker,
+                    "Action": action_sig,
+                    "Score": eval_res["Score"],
+                    "Price_Raw": eval_res['Close'],
+                    "Price": f"${eval_res['Close']:.2f}",
+                    "Rec. Stop": f"${eval_res['Stop_Loss']:.2f} (-{eval_res['Stop_Loss_Pct']:.1f}%)",
+                    "Trend": " Pass" if eval_res["Pass_MA"] else "X Fail",
+                    "Return": " Pass" if eval_res["Pass_Perf"] else "X Fail",
+                    "OBV": " Pass" if eval_res["Pass_OBV"] else "X Fail",
+                    "Rel Strength": eval_res["RS_Display"],
+                    "MACD Exp": " Pass" if eval_res["Pass_MACD"] else "X Fail",
+                    "Drawdown": " Pass" if eval_res["Pass_DD"] else "X Fail",
+                    "52W High": " Pass" if eval_res["Pass_52W"] else "X Fail",
+                    "RSI Band": " Pass" if eval_res["Pass_RSI"] else "X Fail",
+                    "1W Direction": " Pass" if eval_res["Pass_1W"] else "X Fail",
+                    "Flow": " Pass" if eval_res["Pass_Flow"] else "X Fail",
+                })
+            progress_bar.progress((idx + 1) / len(active_tickers))
+        progress_bar.empty()
+
+        if results:
+            res_df = pd.DataFrame(results)
+            res_df = res_df.sort_values(by="Score", ascending=False).reset_index(drop=True)
+            st.session_state["last_screener_df"] = res_df
+            st.session_state["last_screener_title"] = "Weekly Scoring Matrix Results"
+        else:
+            st.warning("Could not retrieve valid historical data for any provided tickers.")
+
+    if "last_screener_df" in st.session_state and not st.session_state["last_screener_df"].empty:
+        st.subheader(st.session_state.get("last_screener_title", "Weekly Scoring Matrix Results"))
+        st.caption(" Select any row to pop open its detailed Scorecard modal window.")
+        
+        screener_df = st.session_state["last_screener_df"]
+        event = st.dataframe(
+            screener_df.drop(columns=["Price_Raw"]),
+            hide_index=True,
+            column_order=[
+                "Ticker", "Action", "Score", "Price", "Rec. Stop",
+                "Trend", "Return", "OBV", "Rel Strength", "MACD Exp",
+                "Drawdown", "52W High", "RSI Band", "1W Direction", "Flow"
+            ],
+            column_config={
+                "Ticker": st.column_config.TextColumn("Ticker"),
+                "Action": st.column_config.TextColumn("Signal", help="BUY (≥70 & 1W Pass), HOLD (45-69 or 1W Fail), SELL (<45)"),
+                "Score": st.column_config.NumberColumn("Score", format="%d pts"),
+                "Rec. Stop": st.column_config.TextColumn("Rec. Stop", help="10-Wk EMA structural trailing stop level")
+            },
+            use_container_width=True,
+            on_select="rerun",
+            selection_mode="single-row"
+        )
+
+        if event and event.selection and event.selection.rows:
+            st.session_state["active_selected_row"] = event.selection.rows[0]
+
+        if "active_selected_row" in st.session_state and st.session_state["active_selected_row"] < len(screener_df):
+            selected_index = st.session_state["active_selected_row"]
+            selected_ticker = screener_df.iloc[selected_index]["Ticker"]
+            show_scorecard_modal(selected_ticker, benchmark_df, RULE_PARAMS)
+
+#
+# TAB 2: UNIVERSAL TICKER ADVISOR
+#
+with tab_advisor:
+    st.subheader("Single Ticker Intrinsic & Dynamic Valuation Engine")
+    
+    single_ticker = st.text_input("Enter Ticker Symbol:", value="AAPL").upper().strip()
+    
+    if st.button("Evaluate Intrinsic Valuation", type="primary") and single_ticker:
+        with st.spinner(f"Evaluating valuation metrics for {single_ticker}..."):
+            t = yf.Ticker(single_ticker)
+            info = t.info if t and hasattr(t, 'info') and isinstance(t.info, dict) else {}
+            
+            p_close = info.get("previousClose") or info.get("currentPrice") or 0.0
+            pe_ratio = info.get("trailingPE") or 0.0
+            fwd_pe = info.get("forwardPE") or 0.0
+            peg_ratio = info.get("pegRatio") or 0.0
+            beta = info.get("beta") or 1.0
+            
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Current Price", f"${p_close:.2f}" if p_close else "N/A")
+            c2.metric("Trailing P/E", f"{pe_ratio:.2f}" if pe_ratio else "N/A")
+            c3.metric("Forward P/E", f"{fwd_pe:.2f}" if fwd_pe else "N/A")
+            c4.metric("PEG Ratio", f"{peg_ratio:.2f}" if peg_ratio else "N/A")
+            
+            st.markdown("---")
+            st.markdown("### Fundamental Summary")
+            st.write(info.get("longBusinessSummary", "No fundamental summary found."))
+
+#
+# TAB 3: PORTFOLIO ALLOCATOR
+#
+with tab_allocator:
+    st.subheader("Asset Allocation & Risk Weighting Strategy")
+    st.caption("Distribute portfolio capital based on macroeconomic risk levels.")
+    
+    capital = st.number_input("Total Portfolio Capital ($):", min_value=1000, value=100000, step=5000)
+    
+    col_alloc1, col_alloc2 = st.columns(2)
+    with col_alloc1:
+        eq_pct = st.slider("Equity Allocation (%)", 0, 100, 60)
+        fi_pct = st.slider("Fixed Income Allocation (%)", 0, 100, 30)
+        cash_pct = 100 - (eq_pct + fi_pct)
+        st.info(f"Cash / Ultra-Short Allocation: **{max(0, cash_pct)}%**")
+        
+    with col_alloc2:
+        if eq_pct + fi_pct > 100:
+            st.error("Total allocation exceeds 100%. Adjust sliders to balance.")
+        else:
+            st.markdown("### Targeted Allocations")
+            st.write(f"- **Equities:** ${capital * (eq_pct / 100):,.2f}")
+            st.write(f"- **Fixed Income:** ${capital * (fi_pct / 100):,.2f}")
+            st.write(f"- **Cash Reserves:** ${capital * (cash_pct / 100):,.2f}")
