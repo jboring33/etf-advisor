@@ -6,6 +6,7 @@ import yfinance as yf
 import requests
 import io
 import plotly.graph_objects as go
+from datetime import datetime
 
 st.set_page_config(
     page_title="Universal Ticker Advisor & Weekly ETF Screener",
@@ -87,14 +88,14 @@ def fetch_live_macro_indicators():
     and 10-Yr Treasury Yield (DGS10) to bypass third-party rate limits.
     """
     macro_data = {
-        "vix_val": None, "vix_pct": None, "vix_status": "Unavailable",
-        "tnx_val": None, "tnx_bps": None, "tnx_status": "Unavailable",
-        "is_valid": False
+        "vix_val": None, "vix_pct": None, "vix_status": "Unavailable", "vix_source": "None",
+        "tnx_val": None, "tnx_bps": None, "tnx_status": "Unavailable", "tnx_source": "None",
+        "is_valid": False,
+        "fetch_timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     }
     
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
 
-    # Helper function to parse FRED CSVs
     def get_fred_series(series_id: str) -> pd.Series:
         try:
             url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
@@ -102,7 +103,6 @@ def fetch_live_macro_indicators():
             if res.status_code == 200:
                 df = pd.read_csv(io.StringIO(res.text))
                 df.columns = [c.strip() for c in df.columns]
-                # Filter out missing non-numeric strings '.' that FRED inserts for non-trading days
                 df[series_id] = pd.to_numeric(df[series_id], errors='coerce')
                 df = df.dropna(subset=[series_id])
                 return df[series_id]
@@ -110,23 +110,24 @@ def fetch_live_macro_indicators():
             pass
         return pd.Series(dtype=float)
 
-    # 1. Fetch VIX from FRED (VIXCLS) with Stooq Intraday Fallback
+    # 1. Fetch VIX
     vix_series = get_fred_series("VIXCLS")
     v_curr, v_prev = None, None
 
-    # Check Stooq first for intraday price updates
     try:
         stooq_vix = pd.read_csv("https://stooq.com/q/l/?s=^vix&f=sdohlcv&h&e=csv")
         if not stooq_vix.empty and 'Close' in stooq_vix.columns and stooq_vix['Close'].iloc[0] > 0:
             v_curr = float(stooq_vix['Close'].iloc[0])
             v_open = float(stooq_vix['Open'].iloc[0])
             v_prev = v_open if v_open > 0 else (v_curr * 0.99)
+            macro_data["vix_source"] = "Stooq Realtime CSV"
     except Exception:
         pass
 
     if v_curr is None and not vix_series.empty and len(vix_series) >= 1:
         v_curr = float(vix_series.iloc[-1])
         v_prev = float(vix_series.iloc[-2]) if len(vix_series) >= 2 else v_curr
+        macro_data["vix_source"] = "FRED (VIXCLS)"
 
     if v_curr is not None:
         macro_data["vix_val"] = v_curr
@@ -139,26 +140,26 @@ def fetch_live_macro_indicators():
         else:
             macro_data["vix_status"] = "High Volatility 🔴"
 
-    # 2. Fetch 10-Yr Yield from FRED (DGS10) with Stooq Intraday Fallback
+    # 2. Fetch 10-Yr Yield
     tnx_series = get_fred_series("DGS10")
     t_curr, t_prev = None, None
 
-    # Check Stooq first for intraday bond yield movements
     try:
         stooq_tnx = pd.read_csv("https://stooq.com/q/l/?s=10y_us.b&f=sdohlcv&h&e=csv")
         if not stooq_tnx.empty and 'Close' in stooq_tnx.columns and stooq_tnx['Close'].iloc[0] > 0:
             t_curr = float(stooq_tnx['Close'].iloc[0])
             t_open = float(stooq_tnx['Open'].iloc[0])
             t_prev = t_open if t_open > 0 else t_curr
+            macro_data["tnx_source"] = "Stooq Realtime CSV"
     except Exception:
         pass
 
     if t_curr is None and not tnx_series.empty and len(tnx_series) >= 1:
         t_curr = float(tnx_series.iloc[-1])
         t_prev = float(tnx_series.iloc[-2]) if len(tnx_series) >= 2 else t_curr
+        macro_data["tnx_source"] = "FRED (DGS10)"
 
     if t_curr is not None:
-        # Standardize formatting to percentage points (e.g. 4.94%)
         t_curr = t_curr / 10.0 if t_curr > 20.0 else t_curr
         t_prev = t_prev / 10.0 if t_prev and t_prev > 20.0 else t_prev
 
@@ -285,7 +286,6 @@ def evaluate_weekly_rules(ticker: str, df: pd.DataFrame, benchmark_df: pd.DataFr
     latest_close = float(close.iloc[-1])
     prev_close = float(close.iloc[-2])
 
-    # 1. Weekly Trend (10/30 EMA)
     ema_fast = close.ewm(span=params["ema_fast_w"], adjust=False).mean()
     ema_slow = close.ewm(span=params["ema_slow_w"], adjust=False).mean()
     fast_val = float(ema_fast.iloc[-1])
@@ -301,7 +301,6 @@ def evaluate_weekly_rules(ticker: str, df: pd.DataFrame, benchmark_df: pd.DataFr
     stop_loss_price = max(fast_val, latest_close * 0.92)
     stop_loss_pct = ((latest_close - stop_loss_price) / latest_close) * 100
 
-    # 2. 12-Week Absolute Return
     lookback_weeks = min(params["perf_weeks"], len(close) - 1)
     past_close = float(close.iloc[-lookback_weeks])
     period_return_pct = ((latest_close - past_close) / past_close) * 100
@@ -313,7 +312,6 @@ def evaluate_weekly_rules(ticker: str, df: pd.DataFrame, benchmark_df: pd.DataFr
         f"**Expected:** Return ≥ +{params['min_return_pct']}%."
     )
 
-    # 3. Weekly OBV Trend
     price_diff = close.diff()
     direction = np.where(price_diff > 0, 1, np.where(price_diff < 0, -1, 0))
     obv = (volume * direction).cumsum()
@@ -328,7 +326,6 @@ def evaluate_weekly_rules(ticker: str, df: pd.DataFrame, benchmark_df: pd.DataFr
         f"**Expected:** Weekly OBV > 20-Wk OBV SMA."
     )
 
-    # 4. 12-Week Relative Strength vs SPY
     alpha_pct = 0.0
     rule_rs_passed = False
     rs_display = "X Fail"
@@ -355,7 +352,6 @@ def evaluate_weekly_rules(ticker: str, df: pd.DataFrame, benchmark_df: pd.DataFr
                 f"**Expected:** Alpha ≥ +{params['min_alpha_pct']}%."
             )
 
-    # 5. MACD Line & Histogram Expansion
     ema12 = close.ewm(span=params["macd_fast"], adjust=False).mean()
     ema26 = close.ewm(span=params["macd_slow"], adjust=False).mean()
     macd_line = ema12 - ema26
@@ -376,7 +372,6 @@ def evaluate_weekly_rules(ticker: str, df: pd.DataFrame, benchmark_df: pd.DataFr
         f"**Expected:** MACD > Signal Line AND Histogram > 0 & Expanding."
     )
 
-    # 6. 26-Week Max Drawdown
     max_dd_pct = 0.0
     rule_dd_passed = False
     if len(close) >= 26:
@@ -392,7 +387,6 @@ def evaluate_weekly_rules(ticker: str, df: pd.DataFrame, benchmark_df: pd.DataFr
             f"**Expected:** Drawdown ≤ {params['max_drawdown_pct']}%."
         )
 
-    # 7. 52-Week High Proximity
     dist_52w_high_pct = 0.0
     rule_52w_passed = False
     if len(close) >= 52:
@@ -406,7 +400,6 @@ def evaluate_weekly_rules(ticker: str, df: pd.DataFrame, benchmark_df: pd.DataFr
             f"**Expected:** Distance < {params['max_dist_52w_pct']}%."
         )
 
-    # 8. Weekly RSI Band Filter
     rsi_val = calculate_weekly_rsi(close, period=14)
     rule_rsi_passed = (rsi_val >= params["min_rsi"]) and (rsi_val <= params["max_rsi"])
     comm_rsi = (
@@ -416,7 +409,6 @@ def evaluate_weekly_rules(ticker: str, df: pd.DataFrame, benchmark_df: pd.DataFr
         f"**Expected:** RSI between {params['min_rsi']} and {params['max_rsi']}."
     )
 
-    # 9. 1-Week Pullback Guardrail (Hard Gate)
     return_1w_pct = ((latest_close - prev_close) / prev_close) * 100
     rule_1w_passed = return_1w_pct >= 0.0
     comm_1w = (
@@ -426,7 +418,6 @@ def evaluate_weekly_rules(ticker: str, df: pd.DataFrame, benchmark_df: pd.DataFr
         f"**Expected:** 1-Week Return ≥ 0.0%."
     )
 
-    # 10. Vectorized 12-Week Money Flow Index
     hist_vol = volume.tail(12)
     hist_close = close.tail(12)
     p_diff = hist_close.diff()
@@ -592,7 +583,6 @@ def show_scorecard_modal(ticker: str, benchmark_df: pd.DataFrame, params: dict):
 with st.sidebar:
     st.header(" Configuration & Live Macro")
     
-    # LIVE MACRO INDICATORS SECTION (FRED / STOOQ API)
     macro_info = fetch_live_macro_indicators()
     
     if macro_info["is_valid"]:
@@ -662,6 +652,26 @@ with st.sidebar:
 # === MAIN INTERFACE ===
 #
 st.title(" Weekly ETF Screener & Analysis")
+
+# --- RAW VALUES DIAGNOSTIC PANEL ---
+raw_data = fetch_live_macro_indicators()
+with st.expander("🔍 RAW MACRO FETCH DIAGNOSTICS (Core Incoming Values)", expanded=True):
+    st.caption(f"Last Fetched: `{raw_data.get('fetch_timestamp')}`")
+    
+    col_raw1, col_raw2, col_raw3 = st.columns(3)
+    with col_raw1:
+        st.markdown("**VIX Raw Data**")
+        st.code(f"Raw Value: {raw_data.get('vix_val')}\n% Change: {raw_data.get('vix_pct')}\nSource: {raw_data.get('vix_source')}", language="yaml")
+    
+    with col_raw2:
+        st.markdown("**10-Yr Yield Raw Data**")
+        st.code(f"Raw Value: {raw_data.get('tnx_val')}\nBasis Points Change: {raw_data.get('tnx_bps')}\nSource: {raw_data.get('tnx_source')}", language="yaml")
+        
+    with col_raw3:
+        st.markdown("**Cache Control**")
+        if st.button("Force Clear Cache & Re-Fetch"):
+            st.cache_data.clear()
+            st.rerun()
 
 benchmark_df = fetch_weekly_etf_history("SPY")
 
