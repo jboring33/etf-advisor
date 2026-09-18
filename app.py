@@ -3,6 +3,8 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import yfinance as yf
+import requests
+import io
 import plotly.graph_objects as go
 
 st.set_page_config(
@@ -76,12 +78,13 @@ if "config_df_v2" not in st.session_state:
     ])
 
 #
-# === REAL-TIME INTRADAY MACRO FETCHING (FAST_INFO FIX) ===
+# === REAL-TIME MACRO FETCHING VIA FRED (ST. LOUIS FED) & STOOQ FALLBACK ===
 #
 @st.cache_data(ttl=60, show_spinner=False)
 def fetch_live_macro_indicators():
     """
-    Fetches real-time intraday data using fast_info to bypass stale daily historical buffers.
+    Directly queries Federal Reserve Economic Data (FRED) for VIX (VIXCLS) 
+    and 10-Yr Treasury Yield (DGS10) to bypass third-party rate limits.
     """
     macro_data = {
         "vix_val": None, "vix_pct": None, "vix_status": "Unavailable",
@@ -89,68 +92,87 @@ def fetch_live_macro_indicators():
         "is_valid": False
     }
     
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+
+    # Helper function to parse FRED CSVs
+    def get_fred_series(series_id: str) -> pd.Series:
+        try:
+            url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
+            res = requests.get(url, headers=headers, timeout=5)
+            if res.status_code == 200:
+                df = pd.read_csv(io.StringIO(res.text))
+                df.columns = [c.strip() for c in df.columns]
+                # Filter out missing non-numeric strings '.' that FRED inserts for non-trading days
+                df[series_id] = pd.to_numeric(df[series_id], errors='coerce')
+                df = df.dropna(subset=[series_id])
+                return df[series_id]
+        except Exception:
+            pass
+        return pd.Series(dtype=float)
+
+    # 1. Fetch VIX from FRED (VIXCLS) with Stooq Intraday Fallback
+    vix_series = get_fred_series("VIXCLS")
+    v_curr, v_prev = None, None
+
+    # Check Stooq first for intraday price updates
     try:
-        # 1. Real-time VIX via fast_info & history fallback
-        vix_t = yf.Ticker("^VIX")
-        v_curr = getattr(vix_t.fast_info, 'last_price', None)
-        v_prev = getattr(vix_t.fast_info, 'previous_close', None)
-        
-        if v_curr is None or pd.isna(v_curr):
-            h = vix_t.history(period="2d")
-            if len(h) >= 2:
-                v_curr, v_prev = float(h["Close"].iloc[-1]), float(h["Close"].iloc[-2])
-            elif len(h) == 1:
-                v_curr = float(h["Close"].iloc[-1])
-
-        if v_curr and not pd.isna(v_curr):
-            macro_data["vix_val"] = float(v_curr)
-            if v_prev and not pd.isna(v_prev) and v_prev > 0:
-                macro_data["vix_pct"] = ((v_curr - v_prev) / v_prev) * 100.0
-            else:
-                macro_data["vix_pct"] = 0.0
-
-            if v_curr < 15:
-                macro_data["vix_status"] = "Low Volatility 🟢"
-            elif v_curr <= 22:
-                macro_data["vix_status"] = "Moderate Volatility 🟡"
-            else:
-                macro_data["vix_status"] = "High Volatility 🔴"
-
-        # 2. Real-time 10-Year Yield (^TNX) via fast_info & scaling check
-        tnx_t = yf.Ticker("^TNX")
-        raw_curr = getattr(tnx_t.fast_info, 'last_price', None)
-        raw_prev = getattr(tnx_t.fast_info, 'previous_close', None)
-        
-        if raw_curr is None or pd.isna(raw_curr):
-            h_tnx = tnx_t.history(period="2d")
-            if len(h_tnx) >= 2:
-                raw_curr, raw_prev = float(h_tnx["Close"].iloc[-1]), float(h_tnx["Close"].iloc[-2])
-            elif len(h_tnx) == 1:
-                raw_curr = float(h_tnx["Close"].iloc[-1])
-
-        if raw_curr and not pd.isna(raw_curr):
-            # Normalize scaling: Convert raw index values (e.g., 49.4 -> 4.94%)
-            curr_yield = raw_curr / 10.0 if raw_curr > 20.0 else raw_curr
-            macro_data["tnx_val"] = float(curr_yield)
-
-            if raw_prev and not pd.isna(raw_prev) and raw_prev > 0:
-                prev_yield = raw_prev / 10.0 if raw_prev > 20.0 else raw_prev
-                # Real basis point change: (4.94 - 5.00) * 100 = -6.0 bps
-                macro_data["tnx_bps"] = (curr_yield - prev_yield) * 100.0
-            else:
-                macro_data["tnx_bps"] = 0.0
-
-            if abs(macro_data["tnx_bps"]) >= 10.0:
-                macro_data["tnx_status"] = "Spiking ⚠️" if macro_data["tnx_bps"] > 0 else "Dropping Sharply 📉"
-            else:
-                macro_data["tnx_status"] = "Stable 🟢"
-
-        if macro_data["vix_val"] is not None and macro_data["tnx_val"] is not None:
-            macro_data["is_valid"] = True
-
+        stooq_vix = pd.read_csv("https://stooq.com/q/l/?s=^vix&f=sdohlcv&h&e=csv")
+        if not stooq_vix.empty and 'Close' in stooq_vix.columns and stooq_vix['Close'].iloc[0] > 0:
+            v_curr = float(stooq_vix['Close'].iloc[0])
+            v_open = float(stooq_vix['Open'].iloc[0])
+            v_prev = v_open if v_open > 0 else (v_curr * 0.99)
     except Exception:
         pass
-        
+
+    if v_curr is None and not vix_series.empty and len(vix_series) >= 1:
+        v_curr = float(vix_series.iloc[-1])
+        v_prev = float(vix_series.iloc[-2]) if len(vix_series) >= 2 else v_curr
+
+    if v_curr is not None:
+        macro_data["vix_val"] = v_curr
+        macro_data["vix_pct"] = ((v_curr - v_prev) / v_prev) * 100.0 if v_prev and v_prev > 0 else 0.0
+
+        if v_curr < 15.0:
+            macro_data["vix_status"] = "Low Volatility 🟢"
+        elif v_curr <= 22.0:
+            macro_data["vix_status"] = "Moderate Volatility 🟡"
+        else:
+            macro_data["vix_status"] = "High Volatility 🔴"
+
+    # 2. Fetch 10-Yr Yield from FRED (DGS10) with Stooq Intraday Fallback
+    tnx_series = get_fred_series("DGS10")
+    t_curr, t_prev = None, None
+
+    # Check Stooq first for intraday bond yield movements
+    try:
+        stooq_tnx = pd.read_csv("https://stooq.com/q/l/?s=10y_us.b&f=sdohlcv&h&e=csv")
+        if not stooq_tnx.empty and 'Close' in stooq_tnx.columns and stooq_tnx['Close'].iloc[0] > 0:
+            t_curr = float(stooq_tnx['Close'].iloc[0])
+            t_open = float(stooq_tnx['Open'].iloc[0])
+            t_prev = t_open if t_open > 0 else t_curr
+    except Exception:
+        pass
+
+    if t_curr is None and not tnx_series.empty and len(tnx_series) >= 1:
+        t_curr = float(tnx_series.iloc[-1])
+        t_prev = float(tnx_series.iloc[-2]) if len(tnx_series) >= 2 else t_curr
+
+    if t_curr is not None:
+        # Standardize formatting to percentage points (e.g. 4.94%)
+        t_curr = t_curr / 10.0 if t_curr > 20.0 else t_curr
+        t_prev = t_prev / 10.0 if t_prev and t_prev > 20.0 else t_prev
+
+        macro_data["tnx_val"] = t_curr
+        macro_data["tnx_bps"] = (t_curr - t_prev) * 100.0 if t_prev else 0.0
+
+        if abs(macro_data["tnx_bps"]) >= 10.0:
+            macro_data["tnx_status"] = "Spiking ⚠️" if macro_data["tnx_bps"] > 0 else "Dropping Sharply 📉"
+        else:
+            macro_data["tnx_status"] = "Stable 🟢"
+
+    if macro_data["vix_val"] is not None or macro_data["tnx_val"] is not None:
+        macro_data["is_valid"] = True
+
     return macro_data
 
 #
@@ -570,28 +592,28 @@ def show_scorecard_modal(ticker: str, benchmark_df: pd.DataFrame, params: dict):
 with st.sidebar:
     st.header(" Configuration & Live Macro")
     
-    # LIVE MACRO INDICATORS SECTION
+    # LIVE MACRO INDICATORS SECTION (FRED / STOOQ API)
     macro_info = fetch_live_macro_indicators()
     
     if macro_info["is_valid"]:
         m_col1, m_col2 = st.columns(2)
         with m_col1:
             st.metric(
-                label="Live VIX",
-                value=f"{macro_info['vix_val']:.2f}",
-                delta=f"{macro_info['vix_pct']:+.2f}%"
+                label="Live VIX (FRED)",
+                value=f"{macro_info['vix_val']:.2f}" if macro_info['vix_val'] else "N/A",
+                delta=f"{macro_info['vix_pct']:+.2f}%" if macro_info['vix_pct'] is not None else None
             )
             st.caption(f"Status: {macro_info['vix_status']}")
             
         with m_col2:
             st.metric(
-                label="10-Yr Yield (^TNX)",
-                value=f"{macro_info['tnx_val']:.2f}%",
-                delta=f"{macro_info['tnx_bps']:+.1f} bps"
+                label="10-Yr Yield (FRED)",
+                value=f"{macro_info['tnx_val']:.2f}%" if macro_info['tnx_val'] else "N/A",
+                delta=f"{macro_info['tnx_bps']:+.1f} bps" if macro_info['tnx_bps'] is not None else None
             )
             st.caption(f"Status: {macro_info['tnx_status']}")
     else:
-        st.warning("⚠️ Live market macro data (VIX / ^TNX) is currently unavailable from source.")
+        st.warning("⚠️ Live market macro data (FRED VIX / 10Y) is currently unavailable.")
 
     st.markdown("---")
     st.header(" Weekly Points Configurator")
